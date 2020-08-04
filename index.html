@@ -9,13 +9,12 @@ contact: jinook.oh@ist.ac.at/ jinook0707@gmail.com
 
 <!-- Load d3.js -->
 <script src="https://d3js.org/d3.v4.js"></script>
-//<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
 <script src="https://d3js.org/d3-dsv.v1.min.js"></script>
 <script src="https://d3js.org/d3-fetch.v1.min.js"></script>
 <script>
 
 d3.csv("data/ActiveViruses.csv").then(function(data) {
-  console.log(data); // [{"Hello": "world"}, …]
+  console.log(data);
 });
 
 <script>
@@ -26,34 +25,6 @@ svg.append("circle")
   .attr("cx", 140).attr("cy", 70).attr("r", 40).style("fill", "red");
 svg.append("circle")
   .attr("cx", 300).attr("cy", 100).attr("r", 40).style("fill", "green");
-
-<!--//
-jQuery.ajax({
-    url: "https://github.com/jinook0707/cremerGroupApp/blob/gh-pages/data/ActiveViruses.csv",
-    type: 'get',
-    dataType: 'text',
-    success: function(data) {
-        let lines = data.split('\n');
-        let fields = lines[0].split(',');
-        
-        let output = [];
-        
-        for(let i = 1; i < lines.length; i++){
-           let current = lines[i].split(',');
-           let doc = {};
-           for(let j = 0; j < fields.length; j++){
-               doc[fields[j]] = current[j];
-           }
-           output.push(doc);
-        }       
-        
-        console.log(output);
-    },
-    error: function(jqXHR, textStatus, errorThrow){
-        console.log(textStatus);
-    }
-});
-//-->
 
 </script>
 
