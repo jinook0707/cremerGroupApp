@@ -1,6 +1,6 @@
-CremerGroupApp is a launcher to start apps developed for studying ant species on the subject of social immunity in Cremer group in Institute of Sciencey and Technology Austria.
+CremerGroupApp is a launcher to start apps developed in Cremer group, Institute of Sciencey and Technology Austria.
 
-All the scripts and programs, developed to facilitate research in Cremer group, will be uploaded to the repository.
+All the scripts and programs, developed to facilitate research on social immunity of ants in Cremer group, will be uploaded to the repository.
 
 
 2020.Aug.04 Jinook Oh
