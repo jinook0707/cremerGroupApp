@@ -6,9 +6,3 @@ All the scripts and programs, developed to facilitate research on social immunit
 2020.Aug.04 Jinook Oh
 contact: jinook.oh@ist.ac.at/ jinook0707@gmail.com
 
-
-<div id="text"></div>
- 
-<script>
-document.getElementById("text").innerHTML = "Text added by JavaScript code";
-</script>
