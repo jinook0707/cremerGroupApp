@@ -1,53 +1,60 @@
-CremerGroupApp is a launcher to start apps developed in Cremer group, Institute of Sciencey and Technology Austria.<br><br>
-All the scripts and programs, developed to facilitate research on social immunity of ants in Cremer group, will be uploaded to the repository.<br><br><br>
-
-2020.Aug.04 Jinook Oh<br>
-contact: jinook.oh@ist.ac.at/ jinook0707@gmail.com
-
-<!-- Add a svg area, empty -->
-<svg id="testArea" height=200 width=450></svg>
-
-<!-- Load d3.js -->
-<script src="https://d3js.org/d3.v4.js"></script>
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-
-<script>
-var svg = d3.select("#testArea")
-svg.append("circle")
-  .attr("cx", 2).attr("cy", 2).attr("r", 40).style("fill", "blue");
-svg.append("circle")
-  .attr("cx", 140).attr("cy", 70).attr("r", 40).style("fill", "red");
-svg.append("circle")
-  .attr("cx", 300).attr("cy", 100).attr("r", 40).style("fill", "green");
-
-jQuery.ajax({
-    url: "https://github.com/jinook0707/cremerGroupApp/blob/gh-pages/data/ActiveViruses.csv",
-    type: 'get',
-    dataType: 'text',
-    success: function(data) {
-        let lines = data.split('\n');
-        let fields = lines[0].split(',');
-        
-        let output = [];
-        
-        for(let i = 1; i < lines.length; i++){
-           let current = lines[i].split(',');
-           let doc = {};
-           for(let j = 0; j < fields.length; j++){
-               doc[fields[j]] = current[j];
-           }
-           output.push(doc);
-        }       
-        
-        console.log(output);
-    },
-    error: function(jqXHR, textStatus, errorThrow){
-        console.log(textStatus);
-    }
-});
-
-
-</script>
-
-
+<html>
+<head>
+    <title>Cremer group code repository</title>
+    <link rel="stylesheet" href="main.css">
+    <style type="text/css">
+        table { border-spacing:10px; }
+        table td#icon { text-align:right;
+                        vertical-align:top; 
+                        padding:10px;
+                        background-color:#151545; }
+    </style>
+</head>
+<body>
+    <table align=center width=50%>
+        <tr>
+            <td id="icon" width=13% rowspan=4>
+                <a href=https://www.socialimmunity.com>
+                    <img src=imgs/cremerGroupIcon.svg width=80% 
+                    class="filter-reddish1">
+                </a>
+            </td>
+        </tr>
+        <tr>
+            <td>
+                <a href=https://www.socialimmunity.com>Cremer group</a> in IST (Institute of Science and Technology) Austria
+                study the behavioural, chemical and immunological mechanisms 
+                of individual and social immunity in ants, and how they 
+                affect epidemiology in the colony and ultimately colony fitness.
+                <br>
+            </td>
+        </tr>
+        <tr>
+            <td>
+                CremerGroupApp is a launcher to start apps developed 
+                in Cremer group for various research projects.<br>
+                The CremerGroupApp repository <a href=https://github.com/jinook0707/cremerGroupApp>[link]</a> will include all 
+                the scripts and programs, developed to facilitate 
+                research on social immunity of ants in Cremer group, 
+                will be uploaded to the repository.
+            </td>
+        </tr>
+        <tr>
+            <td>
+                <br>contact: jinook.oh@ist.ac.at/ jinook0707@gmail.com
+            </td>
+        </tr>
+        <tr><td height=50>&nbsp;</td></tr>
+        <tr>
+            <td colspan=2>
+                <ul>
+                    <li><a href=virusPresenceInAnts.html>Interactive graph</a>,
+                    showing viruses in ants, in the study (in prep.) 
+                    of Viljakainen et al.</li>
+                </ul>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
 

@@ -1,0 +1,12 @@
+body { 
+    background-color: #e3e8fc; 
+}
+
+.filter-reddish1{
+    filter: invert(30%) 
+            sepia(50%) 
+            saturate(2016%) 
+            hue-rotate(0deg) 
+            brightness(100%) 
+            contrast(100%);
+} <!-- from https://codepen.io/sosuke/pen/Pjoqqp -->
