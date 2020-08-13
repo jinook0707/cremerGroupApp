@@ -1,6 +1,36 @@
 body { 
-    background-color: #e3e8fc; 
+    background-color: #e3e8fc;
+    margin:0;
+    padding:0;
 }
+
+table { 
+    border-spacing:10px; 
+}
+
+table td#icon { text-align:right;
+                vertical-align:top; 
+                padding:10px;
+                background-color:#151545; }
+
+table#header {
+    border-spacing: 0px;
+    padding: 0px;
+}
+
+table td#header { padding:5px;
+                  background-color:#777799; 
+                  height: 3vh; }
+
+table#footer {
+    border-spacing: 0px;
+    padding: 0px;
+}
+
+table td#footer { padding:5px;
+                  text-align:right;
+                  vertical-align:middle;
+                  background-color:#e3e8fc; }
 
 .filter-reddish1{
     filter: invert(30%) 

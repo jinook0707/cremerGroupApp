@@ -1,21 +1,24 @@
 <html>
 <head>
-    <meta charset="UTF-8">
-    <link rel="stylesheet" href="main.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script src="common.js"></script>
+
+    <!-- Load d3.js and jQuery -->
+    <script src="https://d3js.org/d3.v4.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
 </head>
+
 <body>
+    <div id="headerContent"></div>
     <center>
-        <b>Host immune response by RNAi elucidates active natural infections with novel viruses in ants</b><br>
+        <br><b>Host immune response by RNAi elucidates active natural infections with novel viruses in ants</b><br>
         - Lumi Viljakainen, Matthias A. Fürst, Anna V. Grasse, Jaana Jurvansuu, Jinook Oh, Lassi Tolonen, Thomas Eder, Thomas Rattei, Sylvia Cremer<br><br><br>
         <svg id="graph_virusInAnts"></svg>
     </center>
+
+    <!-- Load the pie graph for virus presences in ant species -->
+    <script src="virusPresenceInAnts.js"></script>
+
+    <div id="footerContent"></div>
 </body>
-
-<!-- Load d3.js and jQuery -->
-<script src="https://d3js.org/d3.v4.js"></script>
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-
-<!-- Load the pie graph for virus presences in ant species -->
-<script src="virusPresenceInAnts.js"></script>
-
 </html>
