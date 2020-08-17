@@ -24,7 +24,13 @@ jQuery.ajax({ // read CSV file
     dataType: 'text',
     success: function(data) {
         let lines = data.split('\n');
-        let colTitle = lines[0].split(',');
+        let items = lines[0].split(',');
+        let colTitle = [];
+        for (let i = 0; i < items.length; i++) {
+        // set column titles
+            if (items[i].replace(/\s+/g,"") == "") { continue; }
+            colTitle.push(items[i]);
+        }
         let aSpNames = [] // ant species names
         let numPopulations = 3; // number of populations in each ant species
         for(let ci = 2; ci < colTitle.length; ci++){
@@ -41,6 +47,7 @@ jQuery.ajax({ // read CSV file
         // [begin] parse CSV data -----
         for(let li = 1; li < lines.length; li++){
             let items = lines[li].split(',');
+            if (items.length < colTitle.length) { continue; }
             let lineData = {};
             let vMP_indentLevel = 0;
             let vMP_presenceCnt = 0;
@@ -48,7 +55,6 @@ jQuery.ajax({ // read CSV file
             let vMP_degArr = [];
             for(let ci = 0; ci < colTitle.length; ci++){
                 let colVal = items[ci].replace(/\s+/g,""); // remove blanks
-                colVal = replaceAll(colVal, ";", "-"); // replace semi-colon
                 if (colVal == "1") {
                     numVP += 1; // store total number of virus presences
                     vMP_presenceCnt += 1; // count presence
@@ -99,37 +105,33 @@ jQuery.ajax({ // read CSV file
         }
         // [begin] set parameters for graph -----
         let svgH  = window.innerHeight * 0.9
-        let svgW  = svgH * 1.333 
+        let svgW  = svgH * (16/9) 
         //let gSVG = d3.select("body").append("svg")
         let gSVG = d3.select("#graph_virusInAnts");
         gSVG.attr("width", svgW).attr("height", svgH);
-        let spCol = ["rgb(0,255,0)", 
-                     "rgb(0,0,255)", 
-                     "rgb(255,255,0)"]; // color for ant species
+        let spCol = ["rgb(95,186,27)", 
+                     "rgb(0,80,203)",
+                     "rgb(255,225,30)"]; // color for ant species
         let pCol = [
-                    ["rgb(0,200,0)",
+                    ["rgb(175,200,175)",
                      "rgb(120,200,120)",
-                     "rgb(175,200,175)"],
-                    ["rgb(0,0,200)",
+                     "rgb(0,200,0)"],
+                    ["rgb(175,175,200)",
                      "rgb(120,120,200)",
-                     "rgb(175,175,200)"],
-                    ["rgb(200,200,0)",
+                     "rgb(0,0,200)"],
+                    ["rgb(200,200,170)",
                      "rgb(200,200,130)",
-                     "rgb(200,200,170)"],
+                     "rgb(200,200,0)"],
                   ]; // color for each population of each ant species
         let cCol = {
-            "Bunyavirales": "rgb(255,50,255)",
-            "Mononegavirales-Partitiviridae": "rgb(255,100,25)",
-            "Mononegavirales-Rhabdoviridae": "rgb(255,150,75)",
-            "Narnaviridae": "rgb(200,100,200)",
-            "Nodaviridae": "rgb(100,50,100)",
-            "Permutotetraviridae": "rgb(200,50,100)",
+            "Bunyavirales": "rgb(255,127,255)",
+            "Mononegavirales": "rgb(0,0,0)",
+            "Narnaviridae": "rgb(127,0,255)",
+            "Nodaviridae": "rgb(255,127,127)",
+            "Permutotetraviridae": "rgb(127,0,0)",
             "Picornavirales": "rgb(255,0,0)",
-            "Picornavirales-Dicistroviridae-Aparavirus": "rgb(255,50,50)",
-            "Picornavirales-Polycipiviridae": "rgb(255,100,100)",
-            "Picornavirales-Polycipiviridae-Sopolycivirus": "rgb(255,150,150)",
-            "Totiviridae": "rgb(150,0,150)",
-            "Unclassified": "rgb(100,100,100)",
+            "Totiviridae": "rgb(255,127,0)",
+            "Unclassified": "rgb(127,127,127)",
         }; // color each virus classification
         let ct = [svgW*0.37, svgH/2]; // center of pie graph
         // degree for each virus presence dot
@@ -141,6 +143,7 @@ jQuery.ajax({ // read CSV file
         let radVP = (2*Math.PI*radIC) / numVP * 0.2; 
         let vMPInd = radVP * 2.0 // indentation for virus, showing 
                                  // multiple presences
+        let legPosX = svgW * 0.7 // position-x where graph legend starts 
         // [end] set parameters for graph -----
         let selectedEntry = []; // clicked virus or its classification
         // [begin] make data for drawing graph elements -----
@@ -265,23 +268,23 @@ jQuery.ajax({ // read CSV file
         // sort & make data for drawing legend
         let leg_class = []; // virus classifications in legend
         let leg_virus = []; // virus in legend
-        let posY = 10;
+        let posY = 20;
         Object.keys(tLeg).sort().forEach(function(key) { // key: virus class.
             leg_class.push({
                 text: key,
-                txtPt: [svgW*0.75, posY],
+                txtPt: [legPosX, posY],
                 txtAnchor: "start",
                 fontWt: "normal", 
                 fontFamily: "sans-serif", 
                 fontCol: cCol[key],
-                fontSz: 10,
+                fontSz: 12,
             });
             posY += svgH*0.02;
             tLeg[key].sort();
             for (let vi=0; vi<tLeg[key].length; vi++) {
                 leg_virus.push({
                     text: tLeg[key][vi],
-                    txtPt: [svgW*0.9, posY],
+                    txtPt: [legPosX+svgW*0.1, posY],
                     txtAnchor: "start",
                     fontWt: "normal", 
                     fontFamily: "sans-serif", 
