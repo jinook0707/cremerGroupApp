@@ -5,9 +5,12 @@ Frequenty used functions and classes
 Dependency:
     wxPython (4.0), 
     Numpy (1.17), 
+
+last editted: 2020.09.15.
 """
 
-import sys, errno
+import sys, errno, colorsys
+from threading import Thread 
 from os import path, strerror
 from datetime import datetime
 
@@ -408,6 +411,107 @@ def getWXFonts(initFontSz=8, numFonts=5, fSzInc=2,
 
 #-------------------------------------------------------------------------------
 
+def addWxWidgets(w, self, pk):
+    """ Make wxPython widgets
+
+    Args:
+        w (list): List of widget data
+        self (wx.Frame): Frame to work on
+        pk (str): Panel key string
+
+    Return:
+        widLst (list): List of made widgets 
+        pSz (list): Resultant panel size after adding widgets
+    """
+    panel = self.panel[pk]
+    gbs = self.gbs[pk]
+    pSz = [0, 0] # panel size
+    widLst = []
+    row = 0
+    for ri in range(len(w)):
+        _width = 0
+        col = 0
+        for ci in range(len(w[ri])):
+            wd = w[ri][ci]
+            if "size" in wd.keys(): size = wd["size"]
+            else: size = (-1, -1)
+            if "style" in wd.keys(): style = wd["style"]
+            else: style = 0
+            if wd["type"] == "sTxt": # wx.StaticText
+                _w = wx.StaticText(panel, -1, label=wd["label"], size=size,
+                                   style=style) 
+
+            if wd["type"] == "sLn": # wx.StaticLine
+                _w = wx.StaticText(panel, -1, size=size, style=style) 
+            
+            elif wd["type"] == "txt": # wx.TextCtrl
+                _w = wx.TextCtrl(panel, -1, value=wd["value"], size=size, 
+                                 style=style)
+                if "numOnly" in wd.keys() and wd["numOnly"]:
+                    _w.Bind(
+                        wx.EVT_CHAR, 
+                        lambda event: self.onTextCtrlChar(event,
+                                                          isNumOnly=True)
+                        )
+            elif wd["type"] == "btn": # wx.Button
+                _w = wx.Button(panel, -1, label=wd["label"], size=size,
+                               style=style)
+                if "img" in wd.keys(): set_img_for_btn(wd["img"], _w) 
+                if hasattr(self, "onButtonPressDown") and \
+                  callable(getattr(self, "onButtonPressDown")): 
+                    _w.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
+            elif wd["type"] == "chk": # wx.CheckBox
+                _w = wx.CheckBox(panel, id=-1, label=wd["label"], size=size,
+                                 style=style)
+                if hasattr(self, "onCheckBox") and \
+                  callable(getattr(self, "onCheckBox")): 
+                    _w.Bind(wx.EVT_CHECKBOX, self.onCheckBox)
+            elif wd["type"] == "cho": # wx.Choice
+                _w = wx.Choice(panel, -1, choices=wd["choices"], size=size,
+                               style=style)
+                if hasattr(self, "onChoice") and \
+                  callable(getattr(self, "onChoice")): 
+                    _w.Bind(wx.EVT_CHOICE, self.onChoice)
+                _w.SetSelection(_w.FindString(wd["val"]))
+            elif wd["type"] == "radB": # wx.RadioBox
+                _w = wx.RadioBox(panel, -1, label=wd["label"], size=size,
+                                 choices=wd["choices"], style=style,
+                                 majorDimension=wd["majorDimension"])
+                if hasattr(self, "onRadioBox") and \
+                  callable(getattr(self, "onRadioBox")): 
+                    _w.Bind(wx.EVT_RADIOBOX, self.onRadioBox)
+                _w.SetSelection(_w.FindString(wd["val"]))
+            elif wd["type"] == "sld": # wx.Slider
+                _w = wx.Slider(panel, -1, size=size, value=wd["value"],
+                               minValue=wd["minValue"], maxValue=wd["maxValue"],
+                               style=style)
+                if hasattr(self, "onSlider") and \
+                  callable(getattr(self, "onSlider")): 
+                    _w.Bind(wx.EVT_SCROLL, self.onSlider)
+            elif wd["type"] == "cPk": # wx.ColourPickerCtrl
+                _w = wx.ColourPickerCtrl(panel, -1, size=size, 
+                                         colour=wd["color"], style=style)
+                if hasattr(self, "onColourPicker") and \
+                  callable(getattr(self, "onColourPicker")): 
+                    _w.Bind(wx.EVT_COLOURPICKER_CHANGED, self.onColourPicker)
+            elif wd["type"] == "panel": # wx.Panel
+                _w = wx.Panel(panel, -1, size=size, style=style)
+            if "name" in wd.keys(): _w.SetName("%s_%s"%(wd["name"], wd["type"]))
+            if "wrapWidth" in wd.keys(): _w.Wrap(wd["wrapWidth"])
+            if "font" in wd.keys(): _w.SetFont(wd["font"])
+            if "fgColor" in wd.keys(): _w.SetForegroundColour(wd["fgColor"]) 
+            if "bgColor" in wd.keys(): _w.SetBackgroundColour(wd["bgColor"])
+            widLst.append(_w)
+            add2gbs(gbs, _w, (row,col), (1, wd["nCol"]))
+            _width += _w.GetSize()[0]
+            col += wd["nCol"] 
+        row += 1
+        if _width > pSz[0]: pSz[0] = _width
+        pSz[1] += _w.GetSize()[1] + 10
+    return widLst, pSz
+
+#-------------------------------------------------------------------------------
+
 def setupStaticText(panel, label, name=None, size=None, 
                     wrapWidth=None, font=None, fgColor=None, bgColor=None):
     """ Initialize wx.StatcText widget with more options
@@ -499,8 +603,80 @@ def add2gbs(gbs,
 
 #-------------------------------------------------------------------------------
 
+def preProcUIEvt(frame, event, objName, objType):
+    """ Conduct some common processes when there was UI event in
+    an wxPython object.
+    
+    Args:
+        frame (wx.Frame): Frame that calls this function 
+        event (wx.Event)
+        objName (str): Name of the widget, supposed to cause the event.
+        objType (str): Type of the widget.
+    
+    Returns:
+        flag_term (bool): flag to quit function
+        obj (object): widget that caused the event.
+        objName (str): Name of the object.
+        wasFuncCalledViaWxEvent (bool): whehter caller function was 
+            called via wx.Event or directly called from other function.
+        objVal (str): Value of the object, if available.
+    """
+    if DEBUG: print("modFFC.preProcUIEvt()")
+
+    if objName == "":
+        obj = event.GetEventObject()
+        objName = obj.GetName()
+        wasFuncCalledViaWxEvent = True
+    else:
+    # funcion was called by some other function without wx.Event
+        obj = wx.FindWindowByName(objName, frame)
+        wasFuncCalledViaWxEvent = False
+   
+    if frame.flagBlockUI or obj.IsEnabled() == False: flag_term = True 
+    else: flag_term = False
+   
+    objVal = ""
+    if objType in ["txt", "spin", "chk", "sld"]:
+        objVal = obj.GetValue()
+    elif objType in ["cho", "radB"]:
+        objVal = obj.GetString(obj.GetSelection()) # text of chosen option
+    
+    return flag_term, obj, objName, wasFuncCalledViaWxEvent, objVal 
+
+#-------------------------------------------------------------------------------
+    
+def startHeavyTask(frame, taskName, targetFunc, args=None): 
+    """ start potentially heavy task, using Thread
+
+    Args:
+        frame (wx.Frame): Frame that calls this function 
+        taskName (str): Name of the task.
+        targetFunc (func): Function to run for the task
+        args (tuple): Arguments to pass to the target function
+
+    Returns:
+        None
+    """
+    if DEBUG: print("modFFC.startHeavyTask()")
+
+    ### set timer for loading data
+    frame.timer[taskName] = wx.Timer(frame)
+    frame.Bind(wx.EVT_TIMER,
+              lambda event: frame.onTimer(event, taskName),
+              frame.timer[taskName])
+    frame.timer[taskName].Start(10)
+   
+    frame.flagBlockUI = True
+
+    ### start thread to write
+    if args == None: frame.th = Thread(target=targetFunc)
+    else: frame.th= Thread(target=targetFunc, args=args)
+    wx.CallLater(10, frame.th.start)
+
+#-------------------------------------------------------------------------------
+
 def stopAllTimers(timer):
-    """ Stop all running timers
+    """ Stop all running wxPython timers
     
     Args:
         timer (dict): container of all timers to stop.
@@ -516,6 +692,50 @@ def stopAllTimers(timer):
             except: pass
             timer[k] = None
     return timer
+
+#-------------------------------------------------------------------------------
+
+def cvHSV2RGB(h, s, v): 
+    """ convert openCV's HSV color values to RGB values
+
+    Args:
+        h (int): Hue (0-180)
+        s (int): Saturation (0-255)
+        v (int): Value (0-255)
+
+    Returns:
+        (tuple): Tuple of RGB values 
+    """ 
+    if DEBUG: print("modFFC.cvHSV2RGB()")
+
+    h = h / 180.0
+    s = s / 255.0
+    v = v / 255.0
+    return tuple(round(i * 255) for i in colorsys.hsv_to_rgb(h,s,v))
+
+#-------------------------------------------------------------------------------
+
+def getConspicuousCol(col): 
+    """ get conspicuous color of a rgb color
+
+    Args:
+        col (tuple): RGB color tuple
+
+    Returns:
+        (tuple): Tuple of RGB values 
+    """ 
+    if DEBUG: print("modFFC.getConspicuousCol()")
+    
+    if col[:3] in [(0, 0, 0), (255, 255, 255)]:
+        return (255-col[0], 255-col[1], 255-col[2])
+    else:
+        col = [col[x]/255.0 for x in range(3)]
+        hsv = colorsys.rgb_to_hsv(col[0], col[1], col[2])
+        h = (hsv[0] + 0.5) % 1
+        s = 1.0 - hsv[1]
+        v = 1.0 - hsv[2]
+        tmp = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(h,s,v))
+    return tmp
 
 #-------------------------------------------------------------------------------
 

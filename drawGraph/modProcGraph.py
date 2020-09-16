@@ -7,210 +7,456 @@ Dependency:
     Numpy (1.17), 
 """
 
-from sys import platform
+import sys
 from os import path
+from glob import glob
 from copy import copy
+from time import time
+from datetime import timedelta
 
-import wx
+import wx, cv2
 import numpy as np
 
-from modFFC import str2num, getWXFonts, rot_pt, calc_line_angle
-from modFFC import calc_pt_w_angle_n_dist
+from modFFC import *
 
 DEBUG = False
 
 #=======================================================================
 
 class ProcGraphData():
-    """ Class for processing data.
+    """ Class for processing data and generate graph.
     
     Args:
         parent (wx.Frame): Parent frame
-        csvFP (str): File path of data CSV file
+        inputFP (str): File path of data CSV file
     
     Attributes:
         Each attribute is commented in 'setting up attributes' section.
     """
     
-    def __init__(self, parent, csvFP):
+    def __init__(self, parent):
         if DEBUG: print("ProcGraphData.__init__()")
 
-        ##### [begin] setting up attributes -----
+        ##### [begin] setting up attributes on init. -----
         self.parent = parent
-        self.csvFP = parent.csvFP # file path of data CSV
+        self.inputFP = parent.inputFP # input file path
         self.colTitles = [] # data column titles
         self.numData = None # Numpy array of numeric data
         self.strData = None # Numpy array of character data
+        self.graphImg = []
+        self.graphImgIdx = 0
         self.fonts = parent.fonts
         self.uiTask = {} # task from UI (such as to show one virus, class, etc)
         self.uiTask["showVirusLabel"] = None
         self.uiTask["showThisVirusOnly"] = None 
         self.uiTask["showThisClassOnly"] = None 
-        ##### [end] setting up attributes -----
+        ##### [end] setting up attributes on init. -----
     
     #-------------------------------------------------------------------
   
-    def loadData(self, csv=""):
-        """ Load data from CSV file
+    def initOnDataLoading(self, inputFP):
+        """ init. process when input file was loaded
 
         Args:
-            csv (str): String of CSV. If this is not given,
-              self.csvFP will be used to open file and use its string.
+            inputFP (str): Input data file path
 
         Returns:
             None
         """ 
-        if DEBUG: print("ProcGraphData.loadData()")
+        if DEBUG: print("ProcGraphData.initData()")
 
-        gType = self.parent.graphType
-        if gType == "CV2020":
-        # for data of Syliva and Lumi (2020)
-            self.delimiter = ","
-            # column indices of numeric data
-            self.numericDataIdx = [2, 3, 4, 5, 6, 7, 8, 9, 10] 
-            # column indices of string data
-            self.stringDataIdx = [0, 1] 
-            self.npNumericDataType = np.int8
-            self.numSpecies = 3
-            self.numPopulations = 3
-            self.vCR = -1 # radius of virus presence circle
-            self.vpPt = {} # dictionary of virus presence points 
-              # key will be virus such as 'LHUV-1'
-              # value will be list of x,y coordinates where it appears in graph
-            self.vlR = {} # dictionary of virus labels' rects (in legend)
-            self.clR = {} # virus classifications' rects (in legend)
-              # both rects are in form of (x1, y1, x2, y2)
-            ##### [begin] set colors
-            # set colors for each species
-            self.sColor = [
-                            wx.Colour(0,200,0),
-                            wx.Colour(0,0,255),
-                            wx.Colour(150,150,0),
-                          ]
-            # set colors for each population 
-            self.pColor = [
-                            [[50,200,50],
-                             [100,200,100],
-                             [150,200,150]],
-                            [[0,0,175],
-                             [50,50,175],
-                             [100,100,175]],
-                            [[175,175,0],
-                             [175,175,90],
-                             [175,175,150]],
-                          ]
-            ### set colors for each classification
-            self.cColor = {}
-            cl = "Bunyavirales" 
-            self.cColor[cl] = wx.Colour(255,50,255)
-            # -----
-            cl = "Mononegavirales;Partitiviridae"
-            self.cColor[cl] = wx.Colour(255,100,25)
-            cl = "Mononegavirales;Rhabdoviridae"
-            self.cColor[cl] = wx.Colour(255,150,75)
-            # -----
-            cl = "Narnaviridae"
-            self.cColor[cl] = wx.Colour(200,100,200)
-            # -----
-            cl = "Nodaviridae"
-            self.cColor[cl] = wx.Colour(100,50,100)
-            # -----
-            cl = "Permutotetraviridae"
-            self.cColor[cl] = wx.Colour(200,50,100)
-            # -----
-            cl = "Picornavirales"
-            self.cColor[cl] = wx.Colour(255,0,0)
-            cl = "Picornavirales;Dicistroviridae;Aparavirus"
-            self.cColor[cl] = wx.Colour(255,50,50)
-            cl = "Picornavirales;Polycipiviridae"
-            self.cColor[cl] = wx.Colour(255,100,100)
-            cl = "Picornavirales;Polycipiviridae;Sopolycivirus"
-            self.cColor[cl] = wx.Colour(255,150,150)
-            # -----
-            cl = "Totiviridae"
-            self.cColor[cl] = wx.Colour(150,0,150)
-            # -----
-            cl = "Unclassified"
-            self.cColor[cl] = wx.Colour(100,100,100)
-            ##### [end] set colors for each classification
+        p = self.parent
+        
+        if p.graphType == "L2020": 
+            ### store the first frame as the graph image at this initial stage 
+            self.storeGraphImg(self.parent.vRW.currFrame.copy(), 
+                               self.parent.pi["mp"]["sz"])
+
+        elif p.graphType == "J2020":
+            tmp = glob(path.join(inputFP, "*.csv")) # all file list
+            fLst = dict(day=[], night=[])
+            for i, fp in enumerate(tmp):
+                fn = path.basename(fp)
+                if int(fn.split("_")[5]) < 12: fLst["day"].append(fp)
+                else: fLst["night"].append(fp)
+            
+            data = {} # data of each founding queen ants to show on graph
+            data["day"] = {}
+            data["night"] = {}
+            for k in data.keys(): # day & night
+                for fp in fLst[k]: # each file in the dat/night file list
+                    fileH = open(fp, "r")
+                    lines = fileH.readlines()
+                    fileH.close()
+                    fn = path.basename(fp)
+                    tmp = fn.split("_") 
+                    mmdd = tmp[3] + tmp[4] # month & date timestamp
+                    data[k][mmdd] = dict(a00=[], a01=[], a02=[], a03=[])
+                    for line in lines:
+                        if line.startswith("frame-index,"): continue
+                        items = line.split(",")
+                        if len(items) < 13: continue
+                        for ai in range(4):
+                            ak = "a%02i"%(ai) # ant key
+                            val = items[(ai+1)*3].strip().replace("\n","")
+                            if val == "None": val = -1
+                            else: val = int(val)
+                            data[k][mmdd][ak].append(val)
+                        if len(data[k][mmdd][ak]) == 1100: break
+            self.data = data
+            ### color set-up
+            self.color = dict(a00 = dict(day=(0,0,255), night=(0,0,128)),
+                              a01 = dict(day=(0,255,0), night=(0,128,0)),
+                              a02 = dict(day=(255,0,0), night=(128,0,0)),
+                              a03 = dict(day=(255,0,255), night=(128,0,128)))
+   
+    #-------------------------------------------------------------------
+  
+    def storeGraphImg(self, img, sz):
+        """ store graph image after resizing, if necessary 
+
+        Args:
+            img (numpy.ndarray): graph image 
+            sz (tuple): size to display the graph image
+
+        Returns:
+            None
+        """ 
+        if DEBUG: print("ProcGraphData.storeGraphImg()")
+
+        print("[ProcGraphData.storeGraphImg] saving original image..")
+        fn = "origImg%i.png"%(len(self.graphImg))
+        cv2.imwrite(fn, img) # store original image as file
+        self.graphImg.append({})
+        
+        ### resize the image
+        print("[ProcGraphData.storeGraphImg] resizing image..")
+        ratImg2DispImg = calcI2DIRatio(img, sz)
+        if ratImg2DispImg != 1.0:
+            iSz = (int(img.shape[1]*ratImg2DispImg), 
+                   int(img.shape[0]*ratImg2DispImg))
+            if ratImg2DispImg > 1.0:
+                img = cv2.resize(img, iSz, interpolation=cv2.INTER_CUBIC)
+            else:
+                img = cv2.resize(img, iSz, interpolation=cv2.INTER_AREA)
         else:
-            msg = "Unknown graph type: %s"%(gType)
-            wx.MessageBox(msg, "Error", wx.OK|wx.ICON_ERROR)
-            return
+            iSz = (img.shape[1], img.shape[0])
+        
+        ### store the graph images
+        print("[ProcGraphData.storeGraphImg] storing image..")
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        wxImg = wx.Image(iSz[0], iSz[1])
+        wxImg.SetData(img.tostring())
+        self.graphImg[-1]["img"] = wxImg
 
-        colTitles = []  # data column titles
-        numData = [] # numeric data
-        strData = [] # string data
-        ### load CSV data 
-        if csv == "": # CSV is not given
-            f = open(self.csvFP, 'r')
-            csv = f.read()
-            f.close()
-        lines = csv.split("\n")
-        for line in lines:
-            items = [x.strip() for x in line.split(self.delimiter)]
- 
-            if gType == "CV2020":
-            # for data of Syliva and Lumi (2020)
-                while "" in items: items.remove("") # remove empty data
-                if len(items) <= 1: continue # ignore emtpy line.
-                  # line iwth one item is just a comment line. Also ignore.
-                
-                ### store column titles
-                # The first proper (len(items)>1) line is assumed to be
-                # the title line
-                if colTitles == []:
-                    for ii in range(len(items)):
-                        colTitles.append(items[ii])
-                    continue 
-
-                ### store data
-                rsd = [] # row of string data
-                rnd = [] # row of numeric data
-                for ci in range(len(colTitles)): # through columns
-                    val = items[ci].strip()
-                    if ci in self.numericDataIdx:
-                        val = str2num(val)
-                        if val == None: val = -1 
-                        rnd.append(val) # add numeric data
-                    else:
-                        val = val.replace(" ","") # remove blanks
-                        rsd.append(val) # add string data
-                ### add a data line
-                numData.append(rnd)
-                strData.append(rsd)
-         
-        self.colTitles = colTitles
-        self.numData = np.asarray(numData, self.npNumericDataType)
-        self.strData = np.char.asarray(strData)
-         
-        if gType == "CV2020":
-            self.numViruses = self.numData.shape[0] 
-            # number of virus presences in inner circle
-            self.numVPresence = np.sum(self.numData)
-            # degree between two virus presence dots 
-            self.vpDeg = -360.0 / self.numVPresence # minus value = clockwise
+        ### store thumbnail images
+        print("[ProcGraphData.storeGraphImg] storing thumbnail image..")
+        r = img.shape[0] / img.shape[1]
+        w = int(self.parent.pi["mr"]["sz"][0]*0.45)
+        h = int(w * r)
+        self.graphImg[-1]["thumbnail"] = wxImg.Scale(w, h) 
     
     #-------------------------------------------------------------------
   
-    def drawGraph(self, dc, flag=""):
-        """ Draw graph with loaded data 
+    def graphL2020(self, startFrame, endFrame, q2m, flag=""):
+        """ Draw heatmap of ants' positions in structured/unstructured nest.
         
         Args:
-            dc (wx.PaintDC): PaintDC to draw graph on.
+            startFrame (int): Frame index to start of heatmap data.
+            endFrame (int): Frame index to end of heatmap data.
+            q2m (queue.Queue): Queue to send data to main thread.
             flag (str): Flag to indicate certain task such as 'save'
          
         Returns:
             None
         """ 
-        if DEBUG: print("ProcGraphData.drawGraph()")
+        if DEBUG: print("ProcGraphData.graphL2020()")
 
-        gType = self.parent.graphType 
-        if gType == "CV2020": self.graphCV2020(dc, flag)
+        def findAntCols(fImg):
+        # function to find ants by colors
+            HSV_img = cv2.cvtColor(fImg, cv2.COLOR_BGR2HSV)
+            fcRslt = cv2.inRange(HSV_img, HSVp["mi"][0], HSVp["ma"][0])
+            for ci in range(1, 3):
+                fcRslt = cv2.add(
+                            fcRslt,
+                            cv2.inRange(HSV_img, HSVp["mi"][ci], HSVp["ma"][ci])
+                            )
+            ### attempt to remove small erroneous features 
+            kernel = np.ones((3,3),np.uint8)
+            fcRslt = cv2.erode(fcRslt, kernel, iterations=2)
+            fcRslt = cv2.dilate(fcRslt, kernel, iterations=2)
+            # threshold
+            ret, img = cv2.threshold(fcRslt, 50, 255, cv2.THRESH_BINARY)
+            return img
+        
+        p = self.parent
+        
+        ### determine HSV ranges for detecting ant colors
+        HSVp = dict(mi=[], ma=[]) 
+        for ci in range(3):
+        # 0: ant body color (blackish)
+        # 1: color markers other than yellow color 
+        # 2: yellow color marker
+            for mLbl in ["Min", "Max"]:
+                val = []
+                for hLbl in ["H", "S", "V"]:
+                    objName = "col%i%s%s_sld"%(ci, hLbl, mLbl)
+                    obj = wx.FindWindowByName(objName, p.panel["ml"])
+                    val.append(obj.GetValue())
+                key = mLbl.lower()[:2]
+                HSVp[key].append(tuple(val)) # store HSV parameter
+        
+        if p.debugging:
+        # debugging
+            for i in range(10):
+                p.vRW.getFrame(-1) # get frame image
+            fImg = p.vRW.currFrame
+            img = findAntCols(fImg)
+            fImg[img==255] = (50, 50, 255)
+            rsltImg = fImg
+            cv2.putText(rsltImg,
+                        "Frame: %i"%(p.vRW.fi),
+                        (5, rsltImg.shape[0]-20),
+                        cv2.FONT_HERSHEY_PLAIN, 
+                        fontScale=1.2, 
+                        color=(0,0,0),
+                        thickness=1)
+            self.storeGraphImg(rsltImg, p.pi["mp"]["sz"])
+            return
+        
+        # total number of frames
+        nFrames = endFrame - startFrame + 1
+        ### set number of heatmap level ranges
+        hmLvlRngs = []
+        for i in range(len(str(nFrames))-1):
+        # through number of frame by order of magnitude  
+            rng1 = 10 ** i
+            if i > 0: rng1 += 1
+            rng2 = 10 ** (i+1)
+            hmLvlRngs.append((rng1, rng2))
+        hNum = 10**(len(str(nFrames))-1) # number with the highest order of 
+                            # magnitude, e.g.: 10000 in 30000 total frames
+        for hn in range(hNum, nFrames, hNum):
+        # the rest number of frames with the interval of hNum
+        # e.g.: [10000, 20000, 30000] in 30000 total frames
+            hmLvlRngs.append((hn+1, hn+hNum)) 
+
+        startTime = time()
+        ### make array for heatmap
+        shape = p.vRW.currFrame.shape
+        hmArr = np.zeros((shape[0], shape[1]), 
+                         dtype=np.int32) # init array for heatmap 
+        for fi in range(startFrame, endFrame+1):
+        # go through all the frames
+            if (fi+1)%10 == 0:
+                msg = "processing frame-%i/ %i"%(fi+1, endFrame+1)
+                _eF = fi - startFrame
+                _t4f = (time()-startTime) / (_eF+1)
+                _est = (nFrames-1-_eF) * _t4f
+                msg += " [Time remaining: %s]"%(
+                                    str(timedelta(seconds=_est))[:-3]
+                                    )
+                q2m.put(("displayMsg", msg,), True, None)
+            if fi == p.vRW.fi:
+                fImg = p.vRW.currFrame
+            else:
+                p.vRW.getFrame(-1) # get frame image
+                fImg = p.vRW.currFrame
+            img = findAntCols(fImg)
+            hmArr[img==255] += 1 # increase where colors are found
+        
+        ### make base image to draw heat-map
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
+        gImg = cv2.morphologyEx(
+                        fImg.copy(), 
+                        cv2.MORPH_OPEN, 
+                        kernel, 
+                        iterations=5,
+                        ) # to decrease noise & minor features
+        gImg = cv2.Canny(gImg, 50, 100)
+        gImg = gImg.astype(np.int16)
+        gImg -= 175 
+        gImg[gImg<0] = 0
+        bgIdx = np.where(gImg == 0) # indices to draw background color
+        rsltImg = cv2.cvtColor(gImg.astype(np.uint8), 
+                               cv2.COLOR_GRAY2BGR)
+        #rsltImg = np.zeros(fImg.shape, fImg.dtype)
+        
+        ### set background color of heatmap
+        obj = wx.FindWindowByName("bgCol_cPk", p.panel["ml"])
+        hmBgCol = tuple(obj.GetColour())
+        rsltImg[bgIdx] = [hmBgCol[2], hmBgCol[1], hmBgCol[0]]
+        
+        ##### [begin] coloring for heat-map -----
+        maxV = np.max(hmArr)
+        legX = 10 # init legend x
+        legY = 10 # init legend y
+        colSqLen = 20 # color square length in legend
+        ### get indices of pixels for heatmap
+        hmIdx = []
+        nzRngCnt = 0
+        for i in range(len(hmLvlRngs)):
+            rng1 = hmLvlRngs[i][0]
+            rng2 = hmLvlRngs[i][1]
+            idx = np.logical_and(np.greater(hmArr, rng1),
+                                 np.less_equal(hmArr, rng2))
+            if np.sum(idx) == 0:
+                hmIdx.append((False, idx))
+            else:
+                nzRngCnt += 1
+                hmIdx.append((True, idx))
+        ### set colors for each heatmap range
+        hmCols = []
+        _cnt = 0
+        _cnt1 = np.ceil(nzRngCnt/2)
+        _cnt2 = nzRngCnt - _cnt1
+        for i in range(len(hmIdx)):
+            if hmIdx[i][0]:
+                if _cnt < _cnt1: # hmIdx increasing by one order of magnitude
+                    c = (_cnt+1) * int(255/_cnt1)
+                    hmCols.append((0,0,c))
+                else: # numbers in the highest order of magnitude
+                    c = 100 + ((_cnt-_cnt1+1) * int(155/_cnt2))
+                    hmCols.append((0,c,c))
+                _cnt += 1
+            else:
+                hmCols.append((0,0,0))
+        
+        for i in range(len(hmIdx)):
+            idx = hmIdx[i][1]
+            if hmIdx[i][0]: rsltImg[idx] = hmCols[i] # coloring heatmap
+            ### draw legend
+            legX = 10
+            legY = 10 + (i*colSqLen + i*10)
+            cv2.rectangle(rsltImg, 
+                          (legX,legY), 
+                          (legX+colSqLen,legY+colSqLen), 
+                          hmCols[i], 
+                          -1)
+            rng1 = hmLvlRngs[i][0]
+            rng2 = hmLvlRngs[i][1]
+            msg = "Log %.3f (%i)"%(np.log10(rng1), rng1)
+            msg += " - Log %.3f (%i)"%(np.log10(rng2), rng2)
+            if hmIdx[i][0]:
+                tCol = getConspicuousCol(hmBgCol)
+                tCol = (tCol[2], tCol[1], tCol[0])
+            else:
+                tCol = (127,127,127)
+            cv2.putText(rsltImg, 
+                        msg, 
+                        (int(legX+colSqLen*1.5), legY+colSqLen),
+                        cv2.FONT_HERSHEY_PLAIN, 
+                        fontScale=1.2, 
+                        color=tCol,
+                        thickness=1)
+        ##### [end] coloring for heat-map -----
+        ### write frame range
+        cv2.putText(rsltImg,
+                    "Frame: %i - %s"%(startFrame, endFrame),
+                    (5, rsltImg.shape[0]-20),
+                    cv2.FONT_HERSHEY_PLAIN, 
+                    fontScale=1.2, 
+                    color=(255,255,255),
+                    thickness=1)
+        
+        self.storeGraphImg(rsltImg, p.pi["mp"]["sz"])
+        ### store start and end frame
+        self.graphImg[-1]["startFrame"] = startFrame
+        self.graphImg[-1]["endFrame"] = endFrame
+        q2m.put(("finished",), True, None)
+   
+    #-------------------------------------------------------------------
+  
+    def graphJ2020(self, ai, q2m, flag=""):
+        """ Draw change of founding queen ants' movements 
+        
+        Args:
+            ai (int): Ant index.
+            q2m (queue.Queue): Queue to send data to main thread.
+            flag (str): Flag to indicate certain task such as 'save'
+         
+        Returns:
+            None
+        """ 
+        if DEBUG: print("ProcGraphData.graphJ2020()")
+        
+        p = self.parent
+        data = self.data
+        ak = "a%02i"%(ai) # ant key
+
+        ### create array
+        rows = [] 
+        cols = 0
+        for ti, tk in enumerate(data.keys()): # day & night
+            _cols = 0
+            _rows = 0
+            for dk in sorted(data[tk].keys()): # each date
+                _cols += len(data[tk][dk][ak])
+                maxVal = max(data[tk][dk][ak])
+                if maxVal > _rows: _rows = copy(maxVal)
+            rows.append(_rows)
+            if _cols > cols: cols = copy(_cols)
+        msg = "[%s] creating array of size (%i, %i) ..."%(ak, sum(rows), cols)
+        q2m.put(("displayMsg", msg,), True, None)
+        # init array for graph
+        rsltImg = np.zeros((sum(rows), cols, 3), dtype=np.uint8)
+        rsltImg[:rows[0],:] = [255,255,255] # bg-color for day
+        rsltImg[rows[0]:,:] = [200,200,200] # bg-color for night
+        
+        dLineThick = int(rsltImg.shape[1] * 0.001)
+        ptRad = int(rsltImg.shape[0] * 0.005)
+        ptThick = int(rsltImg.shape[0] * 0.0025)
+        x = 0
+        dKeys = list(sorted(data["day"].keys()))
+        for dk in sorted(data["night"].keys()):
+            if not dk in dKeys: dKeys.append(dk)
+        for dk in dKeys: # each date
+            msg = "[%s] processing date - %s.%s ..."%(ak, dk[:2], dk[2:])
+            q2m.put(("displayMsg", msg,), True, None)
+            xs = [x, x]
+            for ti, tk in enumerate(data.keys()): # day & night
+                if not dk in data[tk].keys(): continue
+                endY = sum(rows[:ti+1])
+                color = self.color[ak][tk]
+                for i in range(1, len(data[tk][dk][ak])):
+                    val = data[tk][dk][ak][i]
+                    pVal = data[tk][dk][ak][i-1] # data of previous frame
+                    if -1 in [val, pVal]: continue
+                    y1 = endY - pVal
+                    y2 = endY - val
+                    pt1 = (xs[ti]-1, y1)
+                    pt2 = (xs[ti], y2)
+                    cv2.line(rsltImg, pt1, pt2, color, 1)
+                    xs[ti] += 1
+                ### display average and median value as empty & filled dot
+                medVal = int(np.median(data[tk][dk][ak]))
+                avgVal = int(np.average(data[tk][dk][ak]))
+                midX = int(x + (xs[ti]-x)/2)
+                cv2.circle(rsltImg, (midX, endY-avgVal), ptRad, color, ptThick) 
+                cv2.circle(rsltImg, (midX, endY-medVal), ptRad, color, -1) 
+                ### write average mov value 
+                textY = 500 * (int(dk[2:])%2+1)
+                if ti == 1: textY += rows[0]
+                cv2.putText(rsltImg,
+                            str(avgVal), 
+                            (x, textY),
+                            cv2.FONT_HERSHEY_PLAIN, 
+                            fontScale=30, 
+                            color=(0,0,0),
+                            thickness=30)
+            x = max(xs)
+            # line to show end of the date
+            cv2.line(rsltImg, (x,0), (x,endY), (128,128,128), dLineThick)
+        
+        msg = "[%s] storing & resizing the graph image ..."%(ak)
+        q2m.put(("displayMsg", msg,), True, None)
+        self.storeGraphImg(rsltImg, p.pi["mp"]["sz"])
+
+        q2m.put(("finished",), True, None)
     
     #-------------------------------------------------------------------
   
-    def graphCV2020(self, dc, flag):
+    def graphV2020(self, dc, flag):
         """ Draw graph for ant-virus study by Cremer and Viljakainen (2020)  
         
         Args:
@@ -220,7 +466,7 @@ class ProcGraphData():
         Returns:
             None
         """ 
-        if DEBUG: print("ProcGraphData.graphCV2020()")
+        if DEBUG: print("ProcGraphData.graphV2020()")
         
         dcSz = dc.GetSize()
         arcType = 1 # 0: type of connecting arc with straight line 

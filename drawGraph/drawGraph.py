@@ -1,21 +1,19 @@
 # coding: UTF-8
 
 """
-An open-source software written in Python
-  to import CSV data, then produce a graph with it,
-  (especially for when the graph is complicated).
+An open-source software written in Python to produce a graph.
   Also, it could be used as an interactive graph for a talk.
-Originally developed for a graph in a paper of 
-  Sylvia Cremer and Lumi Viljakainen 
-  about viruses in different species and populations.
 
-This program was coded and tested in macOS 10.13.
+This program was coded and tested in Ubuntu 18.04.
 
 Jinook Oh, Cremer group, Institute of Science and Technology Austria 
-Jan. 2020.
+Aug. 2020.
 
 Dependency:
+    Python (3.7)
     wxPython (4.0)
+    OpenCV (3.4)
+    NumPy (1.18)
 
 ------------------------------------------------------------------------
 Copyright (C) 2020 Jinook Oh & Sylvia Cremer 
@@ -35,10 +33,13 @@ General Public License for more details.
 You should have received a copy of the GNU General Public License along
 with this program.  If not, see <http://www.gnu.org/licenses/>.
 ------------------------------------------------------------------------
+
+Changelog -----
+v.0.1.1: Initial development (for viruses in ants of Lumi Viljakainen).
+v.0.1.20200818: Refactoring + heatmap graph for Linda Sartoris's work
 """
 
 import sys, queue
-from threading import Thread 
 from os import path, mkdir
 from glob import glob
 from copy import copy
@@ -53,34 +54,33 @@ FPATH = path.split(_path)[0] # path of where this Python file is
 sys.path.append(FPATH) # add FPATH to path
 sys.path.append(path.split(FPATH)[0]) # add parent folder to path; for modFFC
 
-from modFFC import GNU_notice, get_time_stamp, getWXFonts
-from modFFC import updateFrameSize, add2gbs, receiveDataFromQueue
-from modFFC import stopAllTimers, set_img_for_btn
+from modFFC import *
 from modProcGraph import ProcGraphData 
+from modVideoRW import VideoRW
 
 DEBUG = False 
-__version__ = "0.1.1"
+__version__ = "0.1.20200818"
 
-#=======================================================================
+#===============================================================================
 
 class GraphDrawerFrame(wx.Frame):
-    """ For drawing a graph based on a CSV file,
-    to save it as a image file or interactive graph on screen.
+    """ Frame for drawing a graph
+    for saving it as a image file or interactive graph on screen.
 
     Args:
         None
      
     Attributes:
         Each attribute is commented in 'setting up attributes' section.
-    """ 
+    """
 
     def __init__(self):
         if DEBUG: print("GraphDrawerFrame.__init__()")
-
+        
         ### init 
         wPos = (0, 20)
         wg = wx.Display(0).GetGeometry()
-        wSz = (wg[2], int(wg[3]*0.85))
+        wSz = (wg[2], int(wg[3]*0.9))
         wx.Frame.__init__(
               self,
               None,
@@ -90,12 +90,18 @@ class GraphDrawerFrame(wx.Frame):
               size = tuple(wSz),
               style=wx.DEFAULT_FRAME_STYLE^(wx.RESIZE_BORDER|wx.MAXIMIZE_BOX),
               )
-        self.SetBackgroundColour('#AAAABB')
+        self.SetBackgroundColour('#333333')
         iconPath = path.join(FPATH, "icon.png")
         if __name__ == '__main__' and path.isfile(iconPath):
             self.SetIcon(wx.Icon(iconPath)) # set app icon
+        # frame close event
         self.Bind(wx.EVT_CLOSE, self.onClose)
-
+        ### set up status-bar
+        self.statusbar = self.CreateStatusBar(1)
+        self.sbBgCol = self.statusbar.GetBackgroundColour()
+        # frame resizing
+        updateFrameSize(self, (wSz[0], wSz[1]+self.statusbar.GetSize()[1]))
+        
         ##### [begin] setting up attributes -----
         self.wSz = wSz
         self.fonts = getWXFonts()
@@ -108,33 +114,25 @@ class GraphDrawerFrame(wx.Frame):
         self.gbs = {} # for GridBagSizer
         self.panel = {} # panels
         self.timer = {} # timers
-        self.csvFP = "" # CSV file path
-        self.outputPath = path.join(FPATH, "output") # output file path
-        if not path.isdir(self.outputPath): mkdir(self.outputPath)
+        self.timer["sb"] = None # timer for status bar message display
+        self.mlWid = [] # wx widgets in middle left panel
+        self.mrWid = [] # wx widgets in middle right panel
+        self.inputFP = ""
         self.origCSVTxt = "" # origianl CSV text from CSV file 
         self.colTitles = [] # column titles of CSV data
         self.numData = None # numpy array, containing numeric data
         self.strData = None # numpy array, containing string data
         self.frameImgFP = [] # list of file paths of 
           # frame images (graph which will become a frame of a video file)
-        self.fImgThumbnailSz = [pi["rp"]["sz"][0]-10, 1] # thumbnail image
-          # size of a saved frame image (graph)
-        self.fImgThumbnailSz[1] = int(self.fImgThumbnailSz[0] * 0.75)
-        ### set various resolutions for image saving
-        self.imgSavRes = []
-        iRes = (800, 600)
-        for i in range(20):
-            w = int(iRes[0] + i * 200)
-            h = int(w * 0.75)
-            self.imgSavRes.append((w, h))
         self.pgd = None # instance of ProcGraphData class
+        self.debugging = False
         self.graphTypeChoices = [
-            "CV2020: Ant-Virus paper [Cremer & Viljakainen]"
-            ]
+                "L2020: structured nest [Sartoris et al]",
+                "J2020: pilot work with founding queens [Jinook]",
+                ]
+        self.graphType = self.graphTypeChoices[0].split(":")[0].strip()
         ##### [end] setting up attributes -----
-        
-        updateFrameSize(self, wSz)
-        
+         
         ### create panels
         for k in pi.keys():
             self.panel[k] = SPanel.ScrolledPanel(self, 
@@ -142,220 +140,165 @@ class GraphDrawerFrame(wx.Frame):
                                                  size=pi[k]["sz"],
                                                  style=pi[k]["style"])
             self.panel[k].SetBackgroundColour(pi[k]["bgCol"])
+        
+        ### set up middle panel (graph panel)
+        self.panel["mp"].Bind(wx.EVT_PAINT, self.onPaintMP)
+        self.panel["mp"].Bind(wx.EVT_LEFT_UP, self.onClickGraph)
+        self.panel["mp"].Bind(wx.EVT_RIGHT_UP, self.onMouseRClick)
+        #self.panel["mp"].Bind(wx.EVT_MOTION, self.onMouseMove)
 
-        ##### [begin] set up top panel interface -----
+        ##### [begin] set up top panel -----
+        pk = "tp"
+        btnSz = (35, 35)
         vlSz = (-1, 20) # size of vertical line separator
-        self.gbs["tp"] = wx.GridBagSizer(0,0)
+        self.gbs[pk] = wx.GridBagSizer(0,0)
         row = 0; col = 0
-        sTxt = wx.StaticText(self.panel['tp'], 
+        sTxt = wx.StaticText(self.panel[pk], 
                              -1,
                              label="Graph type:")
         sTxt.SetForegroundColour("#cccccc")
-        add2gbs(self.gbs["tp"], sTxt, (row,col), (1,1))
+        add2gbs(self.gbs[pk], sTxt, (row,col), (1,1))
         col += 1
-        cho = wx.Choice(self.panel['tp'], 
+        cho = wx.Choice(self.panel[pk], 
                         -1, 
                         choices=self.graphTypeChoices,
                         name="graphType_cho",
                         size=(150,-1))
         cho.SetSelection(0)
-        add2gbs(self.gbs["tp"], cho, (row,col), (1,1))
+        cho.Bind(wx.EVT_CHOICE, self.onChoice)
+        add2gbs(self.gbs[pk], cho, (row,col), (1,1))
         col += 1 
-        btn = wx.Button(self.panel["tp"],
+        btn = wx.Button(self.panel[pk],
                         -1,
-                        size=(30,30),
-                        name="openCSV_btn")
-        set_img_for_btn(path.join(FPATH, "img_open.png"), btn) 
+                        size=btnSz,
+                        name="open_btn")
+        set_img_for_btn(path.join(FPATH, "btn_imgs", "open.png"), btn) 
         btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs["tp"], btn, (row,col), (1,1))
+        add2gbs(self.gbs[pk], btn, (row,col), (1,1))
         col += 1
-        txt = wx.TextCtrl(self.panel['tp'], 
+        txt = wx.TextCtrl(self.panel[pk], 
                           -1,
-                          name="csvFP_txt",
-                          value="[Opened CSV file]",
-                          size=(150,-1),
+                          name="inputFP_txt",
+                          value="[Opened input file]",
+                          size=(300,-1),
                           style=wx.TE_READONLY)
         txt.SetBackgroundColour("#cccccc")
-        add2gbs(self.gbs["tp"], txt, (row,col), (1,1))
+        add2gbs(self.gbs[pk], txt, (row,col), (1,1))
         col += 1
-        add2gbs(self.gbs["tp"],
-                wx.StaticLine(self.panel["tp"],
+        add2gbs(self.gbs[pk],
+                wx.StaticLine(self.panel[pk],
                               -1,
                               size=vlSz,
                               style=wx.LI_VERTICAL),
                 (row,col),
                 (1,1)) # vertical line separator 
         col += 1
-        btn = wx.Button(self.panel['tp'], 
-                                  -1, 
-                                  #label='Quit',
-                                  size=(30,30),
-                                  name="quit_btn")
-        set_img_for_btn(path.join(FPATH, "img_quit.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs["tp"], btn, (row,col), (1,1))
-        self.panel["tp"].SetSizer(self.gbs["tp"])
-        self.gbs["tp"].Layout()
-        self.panel["tp"].SetupScrolling()
-        ##### [end] set up top panel interface -----
+        chk = wx.CheckBox(self.panel[pk],
+                          id=-1,
+                          label="debug",
+                          name="debug_chk",
+                          style=wx.CHK_2STATE)
+        chk.SetValue(self.debugging)
+        chk.Bind(wx.EVT_CHECKBOX, self.onCheckBox)
+        chk.SetForegroundColour('#CCCCCC')
+        add2gbs(self.gbs[pk], chk, (row,col), (1,1))
+        ### 
+        self.panel[pk].SetSizer(self.gbs[pk])
+        self.gbs[pk].Layout()
+        self.panel[pk].SetupScrolling()
+        ##### [end] set up top panel -----
 
-        ##### [begin] set up left panel interface -----
-        self.gbs["lp"] = wx.GridBagSizer(0,0)
-        lpSz = pi["lp"]["sz"]
+        self.initMLWidgets() # set up middle left panel
+        
+        ##### [begin] set up bottom middle panel [graph saving] -----
+        pk = "bm"
         row = 0; col = 0
-        sTxt = wx.StaticText(self.panel['lp'], 
+        self.gbs[pk] = wx.GridBagSizer(0,0)
+        sTxt = wx.StaticText(self.panel[pk], 
                              -1,
-                             label="Current CSV")
-        sTxt.SetForegroundColour('#ffffff')
-        add2gbs(self.gbs["lp"], sTxt, (row,col), (1,1))
-        row += 1
-        self.stcCSV = STC(self.panel["lp"], 
-                          (0,0), 
-                          (lpSz[0],lpSz[1]-30),
-                          fgCol="#cccccc",
-                          bgCol="#555555")
-        self.stcCSV.SetEditable(False) # CSV text is read-only 
-        add2gbs(self.gbs["lp"], self.stcCSV, (row,col), (1,1), bw=0) 
-        self.panel["lp"].SetSizer(self.gbs["lp"])
-        self.gbs["lp"].Layout()
-        #self.panel["lp"].SetupScrolling()
-        ##### [end] set up left panel interface -----
-
-        ##### [begin] set up script panel interface -----
-        self.gbs["sp"] = wx.GridBagSizer(0,0)
-        spSz = pi["sp"]["sz"]
-        row = 0; col = 0
-        sTxt = wx.StaticText(self.panel['sp'], 
-                             -1,
-                             label="Python script to modify CSV lines")
-        sTxt.SetForegroundColour('#ffffff')
-        add2gbs(self.gbs["sp"], sTxt, (row,col), (1,1))
-        row += 1
-        self.stcScript = STC(self.panel["sp"], (0,0), (spSz[0],spSz[1]-60)) 
-        add2gbs(self.gbs["sp"], self.stcScript, (row,col), (1,2), bw=0) 
-        scriptStr = "### Go through each line in lines (Python List).\n"
-        scriptStr += "### If you change 'lines' and click 'Run script',\n"
-        scriptStr += "###  the above CSV lines and graph will modified\n"
-        scriptStr += "# ----------------------------------------------\n"
-        scriptStr += "for li, line in enumerate(lines): # through each line\n"
-        scriptStr += "  cols = [x.strip() for x in line.split(',')]"
-        scriptStr += " # list of each column data of the current line\n"
-        scriptStr += "  line = ''\n"
-        scriptStr += "  for ci in range(len(cols)):\n"
-        scriptStr += "    line += cols[ci] + ', '\n"
-        scriptStr += "  line = line.rstrip(', ')\n"
-        scriptStr += "  lines[li] = line\n"
-        self.stcScript.SetText(scriptStr)
-        row += 1; col = 1 
-        btn = wx.Button(self.panel['sp'], 
-                        -1, 
-                        name="runScript_btn",
-                        size=(30,30))
-        set_img_for_btn(path.join(FPATH, "img_run.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs["sp"], btn, (row,col), (1,1), int(spSz[0]*0.2), wx.LEFT)
-        self.panel["sp"].SetSizer(self.gbs["sp"])
-        self.gbs["sp"].Layout()
-        #self.panel["sp"].SetupScrolling()
-        ##### [end] set up script panel interface -----
-
-        ### set up graph-panel
-        self.panel["gp"].Bind(wx.EVT_PAINT, self.onPaint)
-        self.panel["gp"].Bind(wx.EVT_LEFT_UP, self.onClickGraph)
-        self.panel["gp"].Bind(wx.EVT_RIGHT_UP, self.onMouseRClick)
-        #self.panel["gp"].Bind(wx.EVT_MOTION, self.onMouseMove)
-
-        ##### [begin] set up graph (image) saving interface -----
-        gspSz = pi["gsp"]["sz"]
-        cho = wx.Choice(self.panel['gsp'], 
-                        -1, 
-                        choices=[str(x) for x in self.imgSavRes], 
-                        name="imgSavRes_cho",
-                        pos=(int(gspSz[0]*0.75), 2),
-                        size=(int(gspSz[0]*0.19),-1))
-        cho.SetSelection(6)
-        btn = wx.Button(self.panel["gsp"],
+                             label="Saving resolution :")
+        sTxt.SetForegroundColour("#cccccc")
+        add2gbs(self.gbs[pk], sTxt, (row,col), (1,1), bw=20,
+                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
+        col += 1
+        txt = wx.TextCtrl(self.panel[pk],
+                          -1,
+                          value=str(int(pi["mp"]["sz"][1]*1.3333)),
+                          size=(100,-1),
+                          name="imgSavResW_txt")
+        txt.Bind(wx.EVT_CHAR, 
+                 lambda event: self.onTextCtrlChar(event, isNumOnly=True)) 
+        add2gbs(self.gbs[pk], txt, (row,col), (1,1), bw=2,
+                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
+        col += 1
+        txt = wx.TextCtrl(self.panel[pk],
+                          -1,
+                          value=str(pi["mp"]["sz"][1]),
+                          size=(100,-1),
+                          name="imgSavResH_txt")
+        txt.Bind(wx.EVT_CHAR, 
+                 lambda event: self.onTextCtrlChar(event, isNumOnly=True)) 
+        add2gbs(self.gbs[pk], txt, (row,col), (1,1), bw=2,
+                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
+        col += 1
+        btn = wx.Button(self.panel[pk],
                         -1,
                         name="saveGraph_btn",
-                        pos=(int(gspSz[0]*0.95), 1),
-                        size=(20,20)
+                        pos=(int(pi[pk]["sz"][0]*0.95), 1),
+                        size=btnSz, 
                         )
-        set_img_for_btn(path.join(FPATH, "img_save.png"), btn) 
+        set_img_for_btn(path.join(FPATH, "btn_imgs", "save.png"), btn) 
         btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        ##### [end] set up graph (image) saving interface -----
-        
-        ##### [begin] set up graph (video) saving interface -----
-        self.gbs["vsp"] = wx.GridBagSizer(0,0)
-        vspSz = pi["vsp"]["sz"]
-        row = 0; col = 0
-        btn = wx.Button(self.panel["vsp"],
-                        -1,
-                        size=(30,30),
-                        name="openCSVs_btn")
-        set_img_for_btn(path.join(FPATH, "img_open.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs["vsp"], btn, (row,col), (1,1), 5, wx.LEFT)
-        col += 1
-        chk = wx.CheckBox(self.panel['vsp'], 
-                          -1, 
-                          name="interpolate_chk",
-                          label="",
-                          style=wx.CHK_2STATE)
-        chk.Bind(wx.EVT_CHECKBOX, self.onCheckBox)
-        chk.Disable()
-        add2gbs(self.gbs["vsp"], chk, (row,col), (1,1), 5, wx.LEFT|wx.TOP)
-        col += 1
-        sTxt = wx.StaticText(self.panel['vsp'], 
-                             -1,
-                             label="interpolate")
-        sTxt.SetForegroundColour('#cccccc')
-        add2gbs(self.gbs["vsp"], sTxt, (row,col), (1,1), 5, wx.TOP)
-        col += 1
-        btn = wx.Button(self.panel["vsp"],
-                        -1,
-                        name="saveVid_btn",
-                        size=(30,30))
-        set_img_for_btn(path.join(FPATH, "img_video.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        btn.Disable()
-        _bw = int(vspSz[0]*0.1)
-        add2gbs(self.gbs["vsp"], btn, (row,col), (1,1), _bw, wx.LEFT)
-        self.panel["vsp"].SetSizer(self.gbs["vsp"])
-        self.gbs["vsp"].Layout()
-        ##### [end] set up graph (video) saving interface -----
+        add2gbs(self.gbs[pk], btn, (row,col), (1,1), bw=10,
+                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
+        self.panel[pk].SetSizer(self.gbs[pk])
+        self.gbs[pk].Layout()
+        self.panel[pk].SetupScrolling()
+        ##### [end] set up bottom middle panel [graph saving] -----
+      
+        ##### [begin] set up middle right panel -----
+        pk = "mr"
+        self.gbs[pk] = wx.GridBagSizer(0,0)
+        ### 
+        self.panel[pk].SetSizer(self.gbs[pk])
+        self.gbs[pk].Layout()
+        self.panel[pk].SetupScrolling()
+        ##### [end] set up middle right panel -----
 
-        ##### [begin] set up bottom panel interface -----
-        self.gbs["bp"] = wx.GridBagSizer(0,0)
+        ##### [begin] set up bottom right panel -----
+        pk = "br"
+        self.gbs[pk] = wx.GridBagSizer(0,0)
+        pSz = pi[pk]["sz"]
         row = 0; col = 0
-        self.bp_sTxt = wx.StaticText(self.panel['bp'], -1, label="")
-        self.bp_sTxt.SetBackgroundColour('#dddddd')
-        self.bp_sTxt.SetForegroundColour('#000000')
-        add2gbs(self.gbs["bp"], self.bp_sTxt, (row,col), (1,1))
-        self.panel["bp"].SetSizer(self.gbs["bp"])
-        self.gbs["bp"].Layout()
-        #self.panel["bp"].SetupScrolling()
-        ##### [end] set up bottom panel interface -----
-
+        btn = wx.Button(self.panel[pk],
+                        -1,
+                        size=btnSz,
+                        name="saveAll_btn")
+        set_img_for_btn(path.join(FPATH, "btn_imgs", "saveAll.png"), btn) 
+        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
+        add2gbs(self.gbs[pk], btn, (row,col), (1,1), 10, wx.LEFT)
+        self.panel[pk].SetSizer(self.gbs[pk])
+        self.gbs[pk].Layout()
+        ##### [end] set up bottom right panel -----
+         
         ### keyboard binding
-        exit_btnId = wx.NewIdRef(count=1)
-        #space_btnId = wx.NewIdRef(count=1) # for continuous playing 
-        self.Bind(wx.EVT_MENU, self.onClose, id = exit_btnId)
-        #self.Bind(wx.EVT_MENU, self.onSpace, id = space_btnId)
+        exitId = wx.NewIdRef(count=1)
+        saveId = wx.NewIdRef(count=1)
+        self.Bind(wx.EVT_MENU, self.onClose, id = exitId)
+        self.Bind(wx.EVT_MENU, self.saveGraph, id = saveId)
         accel_tbl = wx.AcceleratorTable([
-                            (wx.ACCEL_CMD,  ord('Q'), exit_btnId ),
-                            #(wx.ACCEL_NORMAL, wx.WXK_SPACE, space_btnId),
+                            (wx.ACCEL_CTRL,  ord('Q'), exitId),
+                            (wx.ACCEL_CTRL,  ord('S'), saveId),
                                         ])
         self.SetAcceleratorTable(accel_tbl)
-       
+         
         ### make this frame modal
         if __name__ != "__main__":
             _dirs = path.normpath(FPATH).split("/")
             if len(_dirs) > 1 and "cremergroupapp" in _dirs[-2].lower():
                 self.makeModal(True)
         
-        #self.openCSVFile()
-    
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def makeModal(self, modal=True):
         """ Function to make the current frame to be modal.
@@ -375,7 +318,7 @@ class GraphDrawerFrame(wx.Frame):
         if not modal and hasattr(self, '_disabler'):
             del self._disabler
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def setPanelInfo(self):
         """ Set up panel information.
@@ -388,7 +331,7 @@ class GraphDrawerFrame(wx.Frame):
         """
         if DEBUG: print("GraphDrawerFrame.setPanelInfo()")
 
-        wSz = self.wSz
+        wSz = self.wSz 
         pi = {} # information of panels
         # top panel for major buttons
         pi["tp"] = dict(pos=(0, 0), 
@@ -396,53 +339,191 @@ class GraphDrawerFrame(wx.Frame):
                         bgCol="#333333", 
                         style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
         tpSz = pi["tp"]["sz"]
-        # bottom panel for short info
-        pi["bp"] = dict(pos=(0, wSz[1]-30), 
-                        sz=(wSz[0], 30), 
-                        bgCol="#dddddd", 
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
-        bpSz = pi["bp"]["sz"]
-        # left panel for showing CSV lines 
-        pi["lp"] = dict(pos=(0, tpSz[1]), 
-                        sz=(int(wSz[0]*0.25), 
-                            int((wSz[1]-tpSz[1]-bpSz[1])*0.5)),
+        # middle left panel
+        pi["ml"] = dict(pos=(0, tpSz[1]), 
+                        sz=(int(wSz[0]*0.2), wSz[1]-tpSz[1]),
                         bgCol="#333333",
                         style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
-        lpSz = pi["lp"]["sz"]
-        # panel for writing script
-        pi["sp"] = dict(pos=(0, tpSz[1]+lpSz[1]),
-                        sz=lpSz,
-                        bgCol="#333333",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
-        gph = wSz[1]-tpSz[1]-bpSz[1]-30
-        gpw = gph * 1.3333
-        # panel for showing graph
-        pi["gp"] = dict(pos=(lpSz[0], tpSz[1]),
+        mlSz = pi["ml"]["sz"] 
+        savH = 50 # height for saving interface for graph image/video
+        gph = wSz[1]-tpSz[1]-savH # graph height
+        gpw = int(gph * (4/3)) # graph width
+        # middle panel
+        pi["mp"] = dict(pos=(mlSz[0], tpSz[1]),
                         sz=(gpw, gph), 
-                        bgCol="#888888",
+                        bgCol="#333333",
                         style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
-        gpSz = pi["gp"]["sz"]
-        # panel for showing graph image saving interface 
-        pi["gsp"] = dict(pos=(lpSz[0], wSz[1]-bpSz[1]-30),
-                        sz=(gpSz[0], 30),
+        mpSz = pi["mp"]["sz"]
+        # bottom panel (for showing graph image saving interface)
+        pi["bm"] = dict(pos=(mlSz[0], wSz[1]-savH),
+                        sz=(mpSz[0], savH),
                         bgCol="#333333",
                         style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER) 
-        rw = wSz[0]-lpSz[0]-gpSz[0] # right panel width
+        bmSz = pi["bm"]["sz"]
+        # right panel (for showing frame images)
+        pi["mr"] = dict(pos=(mlSz[0]+mpSz[0], tpSz[1]),
+                        sz=(wSz[0]-mlSz[0]-mpSz[0], wSz[1]-tpSz[1]-savH),
+                        bgCol="#333333",
+                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
         # panel for showing graph video saving interface 
-        pi["vsp"] = dict(pos=(wSz[0]-rw, wSz[1]-bpSz[1]-30),
-                        sz=(rw, 30),
+        pi["br"] = dict(pos=(pi["mr"]["pos"][0], wSz[1]-savH),
+                        sz=(pi["mr"]["sz"][0], savH),
                         bgCol="#333333",
                         style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER) 
-        vspSz = pi["vsp"]["sz"]
-        # right panel for showing frame images
-        pi["rp"] = dict(pos=(wSz[0]-rw, tpSz[1]),
-                        sz=(rw, wSz[1]-tpSz[1]-bpSz[1]-vspSz[1]),
-                        bgCol="#888888",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
-        rpSz = pi["rp"]["sz"] 
         return pi
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
+   
+    def initMLWidgets(self):
+        """ Set up wxPython widgets when input file is loaded. 
+        
+        Args:
+            None
+        
+        Returns:
+            pi (dict): Panel information.
+        """
+        if DEBUG: print("GraphDrawerFrame.initMLWidgets()")
+        
+        pk = "ml"
+        pSz = self.pi[pk]["sz"]
+        hlSz = (int(pSz[0]*0.95), -1)
+        
+        for i, w in enumerate(self.mlWid): # through widgets in the panel
+            try:
+                self.gbs[pk].Detach(w) # detach 
+                w.Destroy() # destroy
+            except:
+                pass
+        
+        ##### [begin] set up middle left panel -----
+        w = [] # each itme represents a row in the left panel 
+        if self.graphType == "L2020":
+            ### widgets for color of ant body
+            h=0; s=0; v=0 # color1 min HSV
+            rgbVal = cvHSV2RGB(h, s, v)
+            w.append([{"type":"sTxt", "label":"Color0 [HSV-min.]", "nCol":2},
+                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
+                       "size":(20,20), "name":"col0Min"}])
+            w.append([{"type":"sld", "name":"col0HMin", "value":h, "nCol":1,
+                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col0SMin", "value":s, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col0VMin", "value":v, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)}])
+            h=180; s=140; v=100 # color1 max HSV
+            rgbVal = cvHSV2RGB(h, s, v)
+            w.append([{"type":"sTxt", "label":"Color0 [HSV-max.]", "nCol":2},
+                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
+                       "size":(20,20), "name":"col0Max"}])
+            w.append([{"type":"sld", "name":"col0HMax", "value":h, "nCol":1,
+                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col0SMax", "value":s, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col0VMax", "value":v, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)}])
+            w.append([{"type":"sLn", "size":(int(pSz[0]*0.9),-1), "nCol":3,
+                       "style":wx.LI_HORIZONTAL}])
+            
+            ### widgets for color markers (except yellow)
+            h=50; s=80; v=80 # color2 min HSV
+            rgbVal = cvHSV2RGB(h, s, v)
+            w.append([{"type":"sTxt", "label":"Col-1 [HSV-min.]", "nCol":2},
+                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
+                       "size":(20,20), "name":"col1Min"}])
+            w.append([{"type":"sld", "name":"col1HMin", "value":h, "nCol":1,
+                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col1SMin", "value":s, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col1VMin", "value":v, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)}])
+            h=180; s=255; v=200 # color2 max HSV
+            rgbVal = cvHSV2RGB(h, s, v)
+            w.append([{"type":"sTxt", "label":"Col-1 [HSV-max.]", "nCol":2},
+                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
+                       "size":(20,20), "name":"col1Max"}])
+            w.append([{"type":"sld", "name":"col1HMax", "value":h, "nCol":1,
+                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col1SMax", "value":s, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col1VMax", "value":v, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)}])
+            w.append([{"type":"sLn", "size":(int(pSz[0]*0.9),-1), "nCol":3,
+                       "style":wx.LI_HORIZONTAL}])
+            
+            ### widgets for yellow color markers
+            h=10; s=200; v=150 # color3 min HSV
+            rgbVal = cvHSV2RGB(h, s, v)
+            w.append([{"type":"sTxt", "label":"Col-2 [HSV-min.]", "nCol":2},
+                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
+                       "size":(20,20), "name":"col2Min"}])
+            w.append([{"type":"sld", "name":"col2HMin", "value":h, "nCol":1,
+                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col2SMin", "value":s, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col2VMin", "value":v, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)}])
+            h=30; s=255; v=250 # color3 max HSV
+            rgbVal = cvHSV2RGB(h, s, v)
+            w.append([{"type":"sTxt", "label":"Col-2 [HSV-max.]", "nCol":2},
+                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
+                       "size":(20,20), "name":"col2Max"}])
+            w.append([{"type":"sld", "name":"col2HMax", "value":h, "nCol":1,
+                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col2SMax", "value":s, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)},
+                      {"type":"sld", "name":"col2VMax", "value":v, "nCol":1,
+                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
+                       "size":(int(pSz[0]*0.3), -1)}])
+            w.append([{"type":"sLn", "size":(int(pSz[0]*0.9),-1), "nCol":3,
+                       "style":wx.LI_HORIZONTAL}])
+            
+            ### widgets for changing color scheme
+            w.append([{"type":"sTxt", "label":"Background color", "nCol":1},
+                      {"type":"cPk", "nCol":1, "color":(0,0,0), 
+                       "name":"bgCol"}])
+            w.append([{"type":"sTxt", "label":"Low heat color", "nCol":1}])
+            
+            ### widgets for frame range to calculate heatmap
+            w.append([{"type":"sTxt", "label":"start-frame", "nCol":1},
+                      {"type":"txt", "name":"startFrame", "value":"0",
+                       "nCol":1, "numOnly":True}])
+            w.append([{"type":"sTxt", "label":"end-frame", "nCol":1},
+                      {"type":"txt", "name":"endFrame", "value":"1",
+                       "nCol":1, "numOnly":True}])
+            ### widgets for frame intervals for heatmap generation
+            w.append([{"type":"sTxt", "label":"frame-interval", "nCol":1},
+                      {"type":"txt", "name":"frameIntv", "value":"1",
+                       "nCol":1, "numOnly":True}])
+            ### button widget to draw the graph
+            w.append([{"type":"btn", "name":"draw", "label":"Draw heatmap",
+                       "nCol":2}])
+        self.gbs[pk] = wx.GridBagSizer(0,0) 
+        self.mlWid, __ = addWxWidgets(w, self, pk) 
+        ### 
+        self.panel[pk].SetSizer(self.gbs[pk])
+        self.gbs[pk].Layout()
+        self.panel[pk].SetupScrolling()
+        ##### [end] set up middle left panel -----
+    
+    #---------------------------------------------------------------------------
 
     def onButtonPressDown(self, event, objName=""):
         """ wx.Butotn was pressed.
@@ -457,49 +538,68 @@ class GraphDrawerFrame(wx.Frame):
         """
         if DEBUG: print("GraphDrawerFrame.onButtonPressDown()")
 
-        if objName == '':
-            obj = event.GetEventObject()
-            objName = obj.GetName()
-        else:
-            obj = wx.FindWindowByName(objName, self.panel["tp"])
+        ret = preProcUIEvt(self, event, objName, "btn")
+        flag_term, obj, objName, wasFuncCalledViaWxEvent, objVal = ret
+        if flag_term: return
 
-        if self.flagBlockUI: return
-        if not obj.IsEnabled(): return
-        
+        if self.flagBlockUI or not obj.IsEnabled(): return
         self.playSnd("leftClick")
 
-        if objName in ["runScript_btn", "saveGraph_btn"]:
-            if self.csvFP == "": return # there's no opened CSV file
-            self.flagBlockUI = True 
-            ### set timer for updating progress 
-            self.timer["prog"] = wx.Timer(self)
-            self.Bind(wx.EVT_TIMER,
-                      lambda event: self.onTimer(event, "prog"),
-                      self.timer["prog"])
-            self.timer["prog"].Start(10) 
+        if objName == "open_btn": self.openInputFile()
 
-        if objName == "quit_btn": self.onClose(None)
-        elif objName == "openCSV_btn": self.openCSVFile()
-        elif objName == "runScript_btn":
-            scriptTxt = self.stcScript.GetText() # python script text
-            ### don't allow importing other libararies
-            if "import" in scriptTxt:
-                ### remove all lines, which contain "import"
-                while "import" in scriptTxt:
-                    idx1 = scriptTxt.index("import")
-                    idx2 = scriptTxt.index("\n", idx1) + 1
-                    scriptTxt = scriptTxt[:idx1] + scriptTxt[idx2:]
-                self.stcScript.SetText(scriptTxt)
-            ### start thread to run script
-            args = (self.q2m, self.q2t, scriptTxt, copy(self.origCSVTxt), ) 
-            self.th = Thread(target=self.runScript, args=args)
-            self.th.start()
-        elif objName == "saveGraph_btn":
-            ### start thread to save 
-            self.th = Thread(target=self.saveGraph)
-            self.th.start()
+        elif objName == "saveGraph_btn": self.saveGraph(None)
+
+        elif objName == "saveAll_btn": self.saveGraph(None, "saveAll") 
+       
+        elif objName == "draw_btn":
+            dc = wx.PaintDC(self.panel["mp"])
+            if self.graphType == "L2020":
+            # Heatmap for Linda (2020)
+                self.pgd.graphImg = []
+                self.pgd.graphImgIdx = 0
+                if self.debugging:
+                    self.pgd.graphL2020(dc, -1, -1, self.q2m)
+                    self.panel["mp"].Refresh() # display graph 
+                else:
+                    for i, w in enumerate(self.mrWid): # widgets in the panel
+                        try:
+                            self.gbs["mr"].Detach(w) # detach 
+                            w.Destroy() # destroy
+                        except:
+                            pass
+                    ### determine start frame
+                    obj = wx.FindWindowByName("startFrame_txt", 
+                                              self.panel["ml"])
+                    startFrame = int(obj.GetValue())
+                    if startFrame < 0 or startFrame >= self.vRW.nFrames:
+                        startFrame = 0
+                        obj.SetValue('0')
+                    self.startFI = startFrame
+                    ### determine end frame
+                    obj = wx.FindWindowByName("endFrame_txt", self.panel["ml"])
+                    endFrame = int(obj.GetValue())
+                    if endFrame <= startFrame or endFrame >= self.vRW.nFrames:
+                        endFrame = self.vRW.nFrames-1
+                        obj.SetValue(str(endFrame))
+                    nFrames = endFrame - startFrame + 1
+                    self.endFI = endFrame
+                    ### determine frame interval
+                    obj = wx.FindWindowByName("frameIntv_txt", self.panel["ml"])
+                    frameIntv = int(obj.GetValue())
+                    if frameIntv < 1 or frameIntv > nFrames:
+                        frameIntv = nFrames
+                        obj.SetValue(str(frameIntv))
+                    self.frameIntv = frameIntv
+                    nextEndFrame = min(startFrame+frameIntv-1, endFrame)
+                    ### start drawing graph
+                    if startFrame == self.vRW.fi:
+                        args = (startFrame, nextEndFrame, self.q2m,)
+                        startHeavyTask(self, "drawGraph", self.pgd.graphL2020, 
+                                       args=args)
+                    else:
+                        self.vRW.getFrame(startFrame, self.callback)
      
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
 
     def onCheckBox(self, event, objName=""):
         """ wx.CheckBox was changed.
@@ -511,25 +611,108 @@ class GraphDrawerFrame(wx.Frame):
         
         Returns: None
         """
-        if DEBUG: print("AnimalBehaviourCoderFrame.onCheckBox()")
+        if DEBUG: print("GraphDrawerFrame.onCheckBox()")
 
-        if self.flagBlockUI: return 
+        ret = preProcUIEvt(self, event, objName, "chk")
+        flag_term, obj, objName, wasFuncCalledViaWxEvent, objVal = ret 
+        if flag_term: return
+
+        if objName == "debug_chk":
+            self.debugging = objVal
+            if self.debugging:
+                self.vRW.initReader(self.inputFP) # init video reader
+    
+    #---------------------------------------------------------------------------
+    
+    def onChoice(self, event, objName=""):
+        """ wx.Choice was changed.
         
-        if objName == "":
-            obj = event.GetEventObject()
-            objName = obj.GetName()
-            isChkBoxEvent = True 
-        else:
-        # funcion was called by some other function without wx.Event
-            obj = wx.FindWindowByName(objName, self.panel["tp"])
-            isChkBoxEvent = False 
+        Args:
+            event (wx.Event)
+            objName (str, optional): objName to emulate wx.Choice event 
+                with the given name. 
         
-        objVal = obj.GetValue() # True/False 
+        Returns:
+            None
+        """
+        if DEBUG: print("GraphDrawerFrame.onChoice()")
+        
+        ret = preProcUIEvt(self, event, objName, "cho")
+        flag_term, obj, objName, wasFuncCalledViaWxEvent, objVal = ret 
+        if flag_term: return
 
-        if objName == "interpolate_chk":
-            pass
+        if objName == "graphType_cho":
+            ## store graph type
+            self.graphType = objVal.split(":")[0].strip()
+            self.initMLWidgets() # set up middle left panel
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
+    
+    def onSlider(self, event, objName=""):
+        """ wx.Slider was changed.
+        
+        Args:
+            event (wx.Event)
+            objName (str, optional): objName to emulate wx.Choice event 
+                with the given name. 
+        
+        Returns:
+            None
+        """
+        if DEBUG: print("GraphDrawerFrame.onSlider()")
+        
+        ret = preProcUIEvt(self, event, objName, "sld")
+        flag_term, obj, objName, wasFuncCalledViaWxEvent, objVal = ret 
+        if flag_term: return
+
+        if objName.startswith("col"):
+            ### update chosen HSV color on the corresponding panel
+            tmp = objName.split("_")[0]
+            colN = tmp[:4]
+            minOrMax = tmp[-3:]
+            val = []
+            for lbl in ["H", "S", "V"]:
+                objName = "%s%s%s_sld"%(colN, lbl, minOrMax)
+                obj = wx.FindWindowByName(objName, self.panel["ml"])
+                val.append(obj.GetValue())
+            rgbVal = cvHSV2RGB(val[0], val[1], val[2])
+            objName = "%s%s_panel"%(colN, minOrMax) 
+            obj = wx.FindWindowByName(objName, self.panel["ml"])
+            obj.SetBackgroundColour(rgbVal)
+
+    #---------------------------------------------------------------------------
+    
+    def onTextCtrlChar(self, event, objName="", isNumOnly=False):
+        """ Character entered in wx.TextCtrl.
+        Currently using to allow entering numbers only.
+        
+        Args:
+            event (wx.Event)
+            objName (str, optional): objName to emulate wx.Choice event 
+                with the given name.
+            isNumOnly (bool): allow number entering only.
+        
+        Returns:
+            None
+        """
+        if DEBUG: print("GraphDrawerFrame.onTextCtrlChar()")
+        
+        ret = preProcUIEvt(self, event, objName, "txt")
+        flag_term, obj, objName, wasFuncCalledViaWxEvent, objVal = ret 
+        if flag_term: return
+
+        if isNumOnly:
+            keyCode = event.GetKeyCode()
+            ### Allow numbers, backsapce, delete, left, right
+            ###   and tab (for hopping between TextCtrls)
+            allowed = [ord(str(x)) for x in range(10)]
+            allowed += [wx.WXK_BACK, wx.WXK_DELETE, wx.WXK_TAB]
+            allowed += [wx.WXK_LEFT, wx.WXK_RIGHT]
+            if keyCode in allowed:
+                event.Skip()
+                return
+    
+    #---------------------------------------------------------------------------
     
     def onClose(self, event):
         """ Close this frame. 
@@ -546,10 +729,10 @@ class GraphDrawerFrame(wx.Frame):
         stopAllTimers(self.timer)
         self.Destroy()
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
 
-    def openCSVFile(self):
-        """ Open data CSV file. 
+    def openInputFile(self):
+        """ Open input file. 
         
         Args:
             None
@@ -557,75 +740,100 @@ class GraphDrawerFrame(wx.Frame):
         Returns:
             None 
         """
-        if DEBUG: print("GraphDrawerFrame.openCSVFile()")
+        if DEBUG: print("GraphDrawerFrame.openInputFile()")
 
-        ### choose result CSV file 
-        wc = 'CSV files (*.csv)|*.csv' 
-        dlg = wx.FileDialog(self, 
-                            "Open CSV file",
-                            defaultDir=FPATH,
-                            wildcard=wc, 
-                            style=wx.FD_OPEN|wx.FD_FILE_MUST_EXIST)
+        if self.graphType == "L2020": fType = "file"; ext = "mp4"
+        elif self.graphType == "J2020": fType = "dir"; ext = "csv" 
+        else: fType = "file"; ext = "csv"
+
+        _dir = path.join(FPATH, "data")
+        if path.isdir(_dir): defDir = _dir
+        else: defDir = FPATH
+
+        ### choose input file or directory 
+        if fType == "file":
+            t = "Open %s file"%(ext.upper())
+            wc = "%s files (*.%s)|*.%s"%(ext.upper(), ext, ext)
+            style = (wx.FD_OPEN|wx.FD_FILE_MUST_EXIST) 
+            dlg = wx.FileDialog(self, t, defDir, wildcard=wc, style=style)
+        elif fType == "dir":
+            t = "Choose directory for analysis"
+            style = (wx.DD_DEFAULT_STYLE|wx.DD_DIR_MUST_EXIST) 
+            dlg = wx.DirDialog(self, t, defDir, style=style)
         if dlg.ShowModal() == wx.ID_CANCEL: return
         dlg.Destroy()
-        csvFP = dlg.GetPath()
-        
-        ### check file existence
-        if not path.isfile(csvFP):
-        # file doesn't exist
-            msg = "File doesn't exist."%(csvFP)
-            wx.MessageBox(msg, "Error", wx.OK|wx.ICON_ERROR)
-            return
-
-        ### update CSV file path
-        self.csvFP = csvFP
-        obj = wx.FindWindowByName("csvFP_txt", self.panel["tp"])
-        obj.SetValue(path.basename(csvFP))
-        ### set CSV text
-        f = open(csvFP, 'r')
-        csvTxt = f.read()
-        f.close()
-        self.stcCSV.SetEditable(True)
-        self.stcCSV.SetText(csvTxt)
-        self.stcCSV.SetEditable(False) # CSV text is read-only
-        self.origCSVTxt = copy(csvTxt) # keep original CSV text
-        ### get graph type
-        obj = wx.FindWindowByName("graphType_cho", self.panel["tp"])
-        self.graphType = obj.GetString(obj.GetSelection())
-        self.graphType = self.graphType.split(":")[0].strip()
+        inputFP = dlg.GetPath()
          
-        self.pgd = ProcGraphData(self, csvFP) # init instance class
-          # for processing graph data 
-        self.loadData() # load CSV data
-     
-    #-------------------------------------------------------------------
-    
-    def loadData(self):
-        """ load CSV data 
+        ### display input file path
+        self.inputFP = inputFP
+        obj = wx.FindWindowByName("inputFP_txt", self.panel["tp"])
+        obj.SetValue(path.basename(inputFP))
 
-        Args: None
-        
-        Returns: None
-        """
-        if DEBUG: print("GraphDrawerFrame.loadData()")
+        if fType == "file" and ext == "csv":
+            ### set CSV text
+            f = open(inputFP, 'r')
+            csvTxt = f.read()
+            f.close()
+            self.stcCSV.SetEditable(True)
+            self.stcCSV.SetText(csvTxt)
+            self.stcCSV.SetEditable(False) # CSV text is read-only
+            self.origCSVTxt = copy(csvTxt) # keep original CSV text 
 
-        csvTxt = self.stcCSV.GetText()
+        self.pgd = ProcGraphData(self) # init instance class
+                                       # for processing graph data 
         try:
-            self.pgd.loadData(csvTxt) # load CSV data
-        except Exception as e: # failed to load data
-            self.csvFP = ""
+            if self.graphType == "L2020":
+                self.pgd.graphImg = []
+                self.pgd.graphImgIdx = 0
+                self.vRW = VideoRW(self) # for reading/writing video file
+                self.vRW.initReader(inputFP) # init video reader
+                ### resize graph panel
+                f = self.vRW.currFrame
+                r = calcI2DIRatio(f, self.pi["mp"]["sz"])
+                sz = (int(f.shape[1]*r), int(f.shape[0]*r))
+                self.panel["mp"].SetSize(sz)
+                self.pi["mp"]["sz"] = sz 
+                self.pi["bm"]["sz"] = (sz[0], self.pi["bm"]["sz"][1])
+                self.panel["bm"].SetSize(self.pi["bm"]["sz"])
+                self.gbs["bm"].Layout()
+                ### update resolution 
+                obj = wx.FindWindowByName("imgSavResW_txt",
+                                          self.panel["bm"])
+                obj.SetValue(str(f.shape[1]))
+                obj = wx.FindWindowByName("imgSavResH_txt",
+                                          self.panel["bm"])
+                obj.SetValue(str(f.shape[0]))
+                ### update frames in the widgets
+                obj = wx.FindWindowByName("startFrame_txt", 
+                                          self.panel["ml"])
+                obj.SetValue('0')
+                obj = wx.FindWindowByName("endFrame_txt", self.panel["ml"])
+                obj.SetValue(str(self.vRW.nFrames-1))
+                obj = wx.FindWindowByName("frameIntv_txt", self.panel["ml"])
+                obj.SetValue(str(self.vRW.nFrames))
+                self.pgd.initOnDataLoading(inputFP)
+            elif self.graphType == "J2020":
+                self.pgd.initOnDataLoading(inputFP)
+                startHeavyTask(self, 
+                               "drawGraph", 
+                               self.pgd.graphJ2020, 
+                               args=(0, self.q2m,))
+        except Exception as e: # failed
+            self.inputFP = ""
             self.pgd.csvFP = ""
+            """
             self.stcCSV.SetEditable(True)
             self.stcCSV.SetText("")
             self.stcCSV.SetEditable(False) # CSV text is read-only
+            """
             msg = "Failed to load CSV data\n"
             msg += str(e)
             wx.MessageBox(msg, "Error", wx.OK|wx.ICON_ERROR)
-        self.panel["gp"].Refresh() # draw graph
+        self.panel["mp"].Refresh() # draw graph
+         
+    #---------------------------------------------------------------------------
     
-    #-------------------------------------------------------------------
-    
-    def onPaint(self, event):
+    def onPaintMP(self, event):
         """ painting graph
 
         Args:
@@ -634,16 +842,19 @@ class GraphDrawerFrame(wx.Frame):
         Returns:
             None
         """
-        if DEBUG: print("GraphDrawerFrame.onPaint()")
+        if DEBUG: print("GraphDrawerFrame.onPaintMP()")
 
-        if self.csvFP == "": return
+        if self.inputFP == "": return
 
         event.Skip()
         
-        dc = wx.PaintDC(self.panel["gp"])        
-        self.pgd.drawGraph(dc)
-            
-    #-------------------------------------------------------------------
+        dc = wx.PaintDC(self.panel["mp"])
+        gImg = self.pgd.graphImg
+        if len(gImg) == 0: return
+        idx = self.pgd.graphImgIdx
+        dc.DrawBitmap(gImg[idx]["img"].ConvertToBitmap(), 0, 0)
+
+    #---------------------------------------------------------------------------
 
     def onTimer(self, event, flag):
         """ Processing on wx.EVT_TIMER event
@@ -655,33 +866,29 @@ class GraphDrawerFrame(wx.Frame):
         Returns:
             None
         """
-        #if DEBUG: print("VideoRW.onTimer()") 
-
-        ### receive (last) data from queue
+        ### Receive data from queue
+        ### * if it's "displayMsg", keep receiving until getting 
+        ###   the last queued message.
+        ### * if the received data is other type than a simple message, 
+        ###   then process it.
         rData = None
-        while True: 
+        while True:
             ret = receiveDataFromQueue(self.q2m)
-            if ret == None: break
-            rData = ret # store received data
-        if rData == None: return
-        
-        if flag == "prog":
-            if rData[0].startswith("Finished"):
-                self.th.join()
-                self.flagBlockUI = False 
-                self.bp_sTxt.SetLabel("")
-                wx.MessageBox(rData[1], "Info", wx.OK|wx.ICON_INFORMATION)
-                if rData[0] == "Finished script running":
-                # thread ran Python script, editting CSV text
-                    self.stcCSV.SetEditable(True)
-                    self.stcCSV.SetText(rData[2]) # update CSV
-                    self.stcCSV.SetEditable(False) # CSV text is read-only
-                    self.loadData() # re-load CSV data
+            if ret == None:
+                break
             else:
-                self.bp_sTxt.SetLabel(rData[0])
-                self.panel["bp"].Refresh()
+                rData = ret # store received data
+                if ret[0] != "displayMsg": break 
+        if rData == None: return
+
+        if rData[0] == "displayMsg":
+            self.showStatusBarMsg(rData[1], -1)
+            return
+        
+        elif rData[0].startswith("finished"):
+            self.callback(rData, flag)
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def onClickGraph(self, event):
         """ Processing when user clicked graph
@@ -694,14 +901,13 @@ class GraphDrawerFrame(wx.Frame):
         """ 
         if DEBUG: print("GraphDrawerFrame.onClickGraph()")
         
-        if self.flagBlockUI or self.csvFP == "": return
+        if self.flagBlockUI or self.inputFP == "": return
 
         self.playSnd("leftClick") 
         
         mp = event.GetPosition()
         
-        if self.graphType.startswith("CV2020"):
-            
+        if self.graphType.startswith("V2020"):
             ### check whether classification label (in legend) is clicked 
             for cl in self.pgd.clR.keys():
                 r = self.pgd.clR[cl]
@@ -711,7 +917,7 @@ class GraphDrawerFrame(wx.Frame):
                     ### process clicked class
                     self.pgd.uiTask["showThisClassOnly"] = cl
                     self.bp_sTxt.SetLabel(cl)
-                    self.panel["gp"].Refresh() # re-draw graph
+                    self.panel["mp"].Refresh() # re-draw graph
                     return
             ### check whether virus label (in legend) is clicked 
             for vl in self.pgd.vlR.keys():
@@ -722,7 +928,7 @@ class GraphDrawerFrame(wx.Frame):
                     ### process clicked virus 
                     self.pgd.uiTask["showThisVirusOnly"] = vl
                     self.bp_sTxt.SetLabel(vl)
-                    self.panel["gp"].Refresh() # re-draw graph
+                    self.panel["mp"].Refresh() # re-draw graph
                     return
             ### check whether virus presence circle is clicked 
             vpPt = self.pgd.vpPt
@@ -739,14 +945,33 @@ class GraphDrawerFrame(wx.Frame):
                         vlStr = "%s [%s]"%(vl, cl)
                         self.pgd.uiTask["showVirusLabel"] = [x, y, vlStr]
                         self.bp_sTxt.SetLabel(vlStr)
-                        self.panel["gp"].Refresh() # re-draw graph
+                        self.panel["mp"].Refresh() # re-draw graph
                         return
             ### nothing specific is clicked, delete label of bp_sTxt 
             self.bp_sTxt.SetLabel("")
             self.pgd.initUITask() # delete current uiTask
-            self.panel["gp"].Refresh() # re-draw graph
-     
-    #-------------------------------------------------------------------
+            self.panel["mp"].Refresh() # re-draw graph
+    
+    #---------------------------------------------------------------------------
+    
+    def onClickThumbnail(self, event):
+        """ process mouse-click on thumbnail image
+
+        Args:
+            event (wx.Event)
+
+        Returns:
+            None
+        """ 
+        if DEBUG: print("GraphDrawerFrame.onClickThumbnail()")
+
+        if self.flagBlockUI or self.inputFP == "": return
+
+        self.playSnd("leftClick") 
+        self.pgd.graphImgIdx = event.GetEventObject().index
+        self.panel["mp"].Refresh()
+
+    #---------------------------------------------------------------------------
     
     def onMouseMove(self, event):
         """ Mouse pointer moving on graph area
@@ -760,11 +985,11 @@ class GraphDrawerFrame(wx.Frame):
         """ 
         if DEBUG: print("GraphDrawerFrame.onMouseMove()")
 
-        if self.flagBlockUI or self.csvFP == "": return
+        if self.flagBlockUI or self.inputFP == "": return
 
         mp = event.GetPosition()
      
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def onMouseRClick(self, event):
         """ Mouse right click on graph area.
@@ -778,11 +1003,11 @@ class GraphDrawerFrame(wx.Frame):
         """ 
         if DEBUG: print("GraphDrawerFrame.onMouseRClick()")
         
-        if self.flagBlockUI or self.csvFP == "": return
+        if self.flagBlockUI or self.inputFP == "": return
 
-        #self.panel["gp"].Refresh() # re-draw graph
+        #self.panel["mp"].Refresh() # re-draw graph
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def callback(self, rData, flag=""):
         """ call back function after running thread
@@ -795,111 +1020,124 @@ class GraphDrawerFrame(wx.Frame):
             None
         """
         if DEBUG: print("GraphDrawerFrame.callbackFunc()")
+
+        if flag == "drawGraph":
+            self.showStatusBarMsg("Heatmap generated.", 3000)
+            idx = len(self.pgd.graphImg)-1
+            self.pgd.graphImgIdx = idx 
+            ### display thumbnail image of the generated graph 
+            bmp = self.pgd.graphImg[-1]["thumbnail"].ConvertToBitmap()
+            sBmp = wx.StaticBitmap(self.panel["mr"], -1, bmp)
+            sBmp.Bind(wx.EVT_LEFT_UP, self.onClickThumbnail)
+            sBmp.index = idx
+            add2gbs(self.gbs["mr"], sBmp, (int(idx/2),idx%2), (1,1))
+            self.mrWid.append(sBmp)
+            self.gbs["mr"].Layout()
+            self.panel["mr"].SetupScrolling()
+            if self.graphType == "L2020":
+                if self.vRW.fi < self.endFI:
+                # heatmap generation not finished yet
+                    ### start another heatmap generation
+                    startFrame = self.vRW.fi+1
+                    nextEndFrame = min(startFrame+self.frameIntv-1, self.endFI)
+                    args = (startFrame, nextEndFrame, self.q2m,)
+                    wx.CallLater(5, startHeavyTask, self, "drawGraph", 
+                                 self.pgd.graphL2020, args)
+
+            elif self.graphType == "J2020":
+                self.showStatusBarMsg("Graph generated.", 3000)
+                ai = len(self.pgd.graphImg)
+                if ai < 4: # there are more ants to process
+                    wx.CallLater(5, startHeavyTask, self, "drawGraph", 
+                                 self.pgd.graphJ2020, (ai, self.q2m,))
+
+        elif flag == "drawGraph4sav":
+                rData[1].SelectObject(wx.NullBitmap)
+                img = self.bmp4sav.ConvertToImage()
+                img.SaveFile(self.imgFP4sav, wx.BITMAP_TYPE_PNG)
+                msg = 'Saved\n'
+                msg += path.basename(self.imgFP4sav) + "\n"
+                msg += " in output folder."
+                self.showStatusBarMsg(msg, 3000)
+                del self.bmp4sav
+                del self.imgFP4sav
         
-        if flag == "finalizeSavingVideo":
-            msg = 'Saved.\n'
-            msg += self.savVidFP 
-            wx.MessageBox(msg, "Info", wx.OK|wx.ICON_INFORMATION)
-            self.jumpToFrame(0) 
-        # show current frame
-        self.displayFrameImage(self.vRW.currFrame, flagMakeDispImg=True) 
+        elif flag == "readFrames":
+            if self.graphType == "L2020":
+                ### reached the frame in video module, start heatmap generation
+                nextEndFrame = min(self.startFI+self.frameIntv-1, self.endFI)
+                args = (self.startFI, nextEndFrame, self.q2m,)
+                startHeavyTask(self, "drawGraph", self.pgd.graphL2020, 
+                               args=args)
+        
         self.flagBlockUI = False
-        self.panel["gp"].Refresh() # re-draw graph
+        if self.th != None:
+            try: self.th.join()
+            except: pass
+        if flag in self.timer.keys():
+            try: self.timer[flag].Stop()
+            except: pass
+        self.panel["mp"].Refresh() # display graph 
+        self.panel["mr"].Refresh() # display thumbnail images 
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
-    def onSpace(self, event):
-        """ start/stop continuous play 
+    def saveGraph(self, event, flag=""):
+        """ Save the current graph and CSV
 
         Args:
             event (wx.Event)
+            flag (str)
 
         Returns:
             None
-        """ 
-        if DEBUG: print("GraphDrawerFrame.onSpace()")
-
-        if self.flagBlockUI or self.csvFP == "": return
-
-        if self.isRunning == False:
-            self.isRunning = True
-            self.timer["run"] = wx.CallLater(5, self.play)
-        else:
-            try: # stop timer
-                self.timer["run"].Stop() 
-                self.timer["run"] = None
-            except: pass
-            self.isRunning = False
-            
-    #-------------------------------------------------------------------
-    
-    def play(self):
-        """ load the next frame and move forward if it's playing.
-
-        Args: None
-
-        Returns: None
-        """ 
-        if DEBUG: print("GraphDrawerFrame.play()")
-
-        self.jumpToFrame(-1) # load next frame
-        
-        if self.isRunning:
-            if self.vRW.fi >= self.endDataIdx: # reached end of available data
-                self.onSpace(None) # stop 
-            else:
-                self.timer["run"] = wx.CallLater(5, self.play) # to next frame
-
-    #-------------------------------------------------------------------
-    
-    def saveGraph(self):
-        """ Save the current graph and CSV
-
-        Args: None
-
-        Returns: None
         """
-        if DEBUG: print("GraphDrawerFrame.save()") 
-        
-        ### file names to write
-        timestamp = get_time_stamp().replace("_","")[:14]
-        fn = path.basename(self.csvFP) # current CSV file name 
-        graphFN = fn.replace(".csv", "_graph_%s.png"%(timestamp)) 
-        graphFP = path.join(self.outputPath, graphFN)
-        csvFN = fn.replace(".csv", "_graph_%s.csv"%(timestamp))
-        csvFP = path.join(self.outputPath, csvFN)
-        
-        msg = "Saving graph ..."
-        self.q2m.put((msg,), True, None)
+        if DEBUG: print("GraphDrawerFrame.save()")
+
+        if self.inputFP == "": return
 
         ### save graph
-        obj = wx.FindWindowByName("imgSavRes_cho", self.panel["gsp"])
-        res = obj.GetString(obj.GetSelection()).strip().strip("()")
-        res = [int(x) for x in res.split(",")] # resolution of graph image
-        bmp = wx.Bitmap(res[0], res[1], depth = -1) 
-        memDC = wx.MemoryDC()
-        memDC.SelectObject(bmp)
-        self.pgd.drawGraph(memDC, flag="save") # draw graph
-        memDC.SelectObject(wx.NullBitmap)
-        img = bmp.ConvertToImage()
-        img.SaveFile(graphFP, wx.BITMAP_TYPE_PNG)
-
+        if self.graphType == "L2020":
+            if flag == "saveAll": idxRng = range(len(self.pgd.graphImg))
+            else: idxRng = [self.pgd.graphImgIdx]
+            msg = "Saved\n"
+            for idx in idxRng:
+                ### determine file path to write
+                #timestamp = get_time_stamp().replace("_","")[:14]
+                fn = path.basename(self.inputFP) # current input file name 
+                ext = "." + fn.split(".")[-1]
+                graphImg = self.pgd.graphImg
+                newTxt = "_graph_%s"%(graphImg[idx]["startFrame"])
+                newTxt += "_%s.png"%(graphImg[idx]["endFrame"]) 
+                newFN = fn.replace(ext, newTxt)
+                imgFP4sav = self.inputFP.replace(fn, newFN)
+                # get image to save 
+                img = cv2.imread("origImg%i.png"%(idx))
+                ### resize if required 
+                obj = wx.FindWindowByName("imgSavResW_txt", self.panel["bm"])
+                w = int(obj.GetValue())
+                obj = wx.FindWindowByName("imgSavResH_txt", self.panel["bm"])
+                h = int(obj.GetValue())
+                if w != img.shape[1] or h != img.shape[0]:
+                    img = cv2.resize(img, (w,h), interpolation=cv2.INTER_CUBIC)
+                # save
+                cv2.imwrite(imgFP4sav, img)
+                msg += imgFP4sav + "\n\n"
+        
+        """
+        ### save CSV
         msg = "Saving CSV ..."
         self.q2m.put((msg,), True, None)
-
-        ### save CSV
+        csvFN = fn.replace(".csv", "_graph_%s.csv"%(timestamp))
+        csvFP = path.join(self.outputPath, csvFN)
         fh = open(csvFP, 'w')
         fh.write(self.stcCSV.GetText())
         fh.close()
-        
-        msg = "Finished saving graph"
-        msg2 = 'Saved\n'
-        msg2 += graphFN + "\n"
         msg2 += csvFN + "\n"
-        msg2 += " in output folder."
-        self.q2m.put((msg,msg2), True, None)
+        """
+        wx.MessageBox(msg, "Info.", wx.OK|wx.ICON_INFORMATION)
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def saveVideo(self):
         """ Save video (with revised head direction line)
@@ -916,7 +1154,9 @@ class GraphDrawerFrame(wx.Frame):
         timestamp = get_time_stamp().replace("_","")[:14]
         if self.vRW.vRecVideoCodec in ['avc1', 'h264']: ext = ".mp4"
         elif self.vRW.vRecVideoCodec == 'xvid': ext = ".avi"
-        self.savVidFP = self.csvFP.replace(".csv", "_rev_%s%s"%(timestamp, ext))
+        inputExt = "." + self.inputFP.split(".")[-1]
+        self.savVidFP = self.inputFP.replace(inputExt, 
+                                             "_rev_%s%s"%(timestamp, ext))
         self.vRW.initWriter(self.savVidFP, 
                             video_fSz, 
                             self.callback, 
@@ -924,7 +1164,7 @@ class GraphDrawerFrame(wx.Frame):
                             self.bp_sTxt)
         self.flagBlockUI = True 
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def playSnd(self, flag=""):
         """ Play sound 
@@ -942,7 +1182,7 @@ class GraphDrawerFrame(wx.Frame):
             snd_click = wx.adv.Sound(path.join(FPATH, "snd_click.wav"))
             snd_click.Play(wx.adv.SOUND_ASYNC)
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
     def runScript(self, q2m, q2t, scriptTxt, csvTxt):
         """ Run script in UI to manipulate CSV values (as a thread).
@@ -982,9 +1222,45 @@ class GraphDrawerFrame(wx.Frame):
         msg2 = 'Script was executed.'
         q2m.put((msg,msg2,csvTxt,), True, None)
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
 
-#=======================================================================
+    def showStatusBarMsg(self, txt, delTime=5000):
+        """ Show message on status bar
+
+        Args:
+            txt (str): Text to show on status bar
+            delTime (int): Duration (in milliseconds) to show the text
+
+        Returns:
+            None
+        """
+        if DEBUG: print("GraphDrawerFrame.showStatusBarMsg()")
+
+        if self.timer["sb"] != None:
+            ### stop status-bar timer
+            self.timer["sb"].Stop()
+            self.timer["sb"] = None
+        
+        # show text on status bar 
+        self.statusbar.SetStatusText(txt)
+        
+        ### change status bar color
+        if txt == '': bgCol = self.sbBgCol 
+        else: bgCol = '#33aa33'
+        self.statusbar.SetBackgroundColour(bgCol)
+
+        if txt != '' and delTime != -1:
+        # showing message and deletion time was given.
+            # schedule to delete the shown message
+            self.timer["sb"] = wx.CallLater(delTime,
+                                            self.showStatusBarMsg,
+                                            '') 
+
+
+
+    #---------------------------------------------------------------------------
+
+#===============================================================================
 
 class STC(wx.stc.StyledTextCtrl):
     def __init__(self, parent, pos, 
@@ -1019,7 +1295,7 @@ class STC(wx.stc.StyledTextCtrl):
           # Can't find reference for STC_CURSOR, 
           # but '1' resulted in the text-input cursor.
 
-#=======================================================================
+#===============================================================================
 
 class GraphDrawerApp(wx.App):
     def OnInit(self):
@@ -1029,7 +1305,7 @@ class GraphDrawerApp(wx.App):
         self.SetTopWindow(self.frame)
         return True
 
-#=======================================================================
+#===============================================================================
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
