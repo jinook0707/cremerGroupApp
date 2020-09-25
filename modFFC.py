@@ -445,7 +445,7 @@ def addWxWidgets(w, self, pk):
                 _w = wx.StaticText(panel, -1, size=size, style=style) 
             
             elif wd["type"] == "txt": # wx.TextCtrl
-                _w = wx.TextCtrl(panel, -1, value=wd["value"], size=size, 
+                _w = wx.TextCtrl(panel, -1, value=wd["val"], size=size, 
                                  style=style)
                 if "numOnly" in wd.keys() and wd["numOnly"]:
                     _w.Bind(
@@ -454,7 +454,9 @@ def addWxWidgets(w, self, pk):
                                                           isNumOnly=True)
                         )
             elif wd["type"] == "btn": # wx.Button
-                _w = wx.Button(panel, -1, label=wd["label"], size=size,
+                lbl = ""
+                if "label" in wd.keys(): lbl = wd["label"]
+                _w = wx.Button(panel, -1, label=lbl, size=size,
                                style=style)
                 if "img" in wd.keys(): set_img_for_btn(wd["img"], _w) 
                 if hasattr(self, "onButtonPressDown") and \
@@ -463,6 +465,9 @@ def addWxWidgets(w, self, pk):
             elif wd["type"] == "chk": # wx.CheckBox
                 _w = wx.CheckBox(panel, id=-1, label=wd["label"], size=size,
                                  style=style)
+                val = False
+                if "val" in wd.keys(): val = wd["val"]
+                _w.SetValue(val)
                 if hasattr(self, "onCheckBox") and \
                   callable(getattr(self, "onCheckBox")): 
                     _w.Bind(wx.EVT_CHECKBOX, self.onCheckBox)
@@ -482,7 +487,7 @@ def addWxWidgets(w, self, pk):
                     _w.Bind(wx.EVT_RADIOBOX, self.onRadioBox)
                 _w.SetSelection(_w.FindString(wd["val"]))
             elif wd["type"] == "sld": # wx.Slider
-                _w = wx.Slider(panel, -1, size=size, value=wd["value"],
+                _w = wx.Slider(panel, -1, size=size, value=wd["val"],
                                minValue=wd["minValue"], maxValue=wd["maxValue"],
                                style=style)
                 if hasattr(self, "onSlider") and \
@@ -501,8 +506,13 @@ def addWxWidgets(w, self, pk):
             if "font" in wd.keys(): _w.SetFont(wd["font"])
             if "fgColor" in wd.keys(): _w.SetForegroundColour(wd["fgColor"]) 
             if "bgColor" in wd.keys(): _w.SetBackgroundColour(wd["bgColor"])
+            if "tooltip" in wd.keys(): _w.SetToolTip(wd["tooltip"])
             widLst.append(_w)
-            add2gbs(gbs, _w, (row,col), (1, wd["nCol"]))
+            if "border" in wd.keys(): bw = wd["border"]
+            else: bw = 5 
+            if "flag" in wd.keys(): flag = wd["flag"]
+            else: flag = (wx.ALIGN_CENTER_VERTICAL|wx.ALL)
+            add2gbs(gbs, _w, (row,col), (1, wd["nCol"]), bw=bw, flag=flag)
             _width += _w.GetSize()[0]
             col += wd["nCol"] 
         row += 1
@@ -692,6 +702,42 @@ def stopAllTimers(timer):
             except: pass
             timer[k] = None
     return timer
+
+#-------------------------------------------------------------------------------
+
+def showStatusBarMsg(wxFrame, txt, delTime=5000):
+    """ Show message on status bar
+
+    Args:
+        wxFrame (wx.Frame)
+        txt (str): Text to show on status bar
+        delTime (int): Duration (in milliseconds) to show the text
+
+    Returns:
+        None
+    """
+    if DEBUG: print("modFFC.showStatusBarMsg()")
+
+    if wxFrame.timer["sb"] != None:
+        ### stop status-bar timer
+        wxFrame.timer["sb"].Stop()
+        wxFrame.timer["sb"] = None
+    
+    # show text on status bar 
+    wxFrame.statusbar.SetStatusText(txt)
+    
+    ### change status bar color
+    if txt == '': bgCol = wxFrame.sbBgCol 
+    else: bgCol = '#33aa33'
+    wxFrame.statusbar.SetBackgroundColour(bgCol)
+    wxFrame.statusbar.Refresh()
+
+    if txt != '' and delTime != -1:
+    # showing message and deletion time was given.
+        # schedule to delete the shown message
+        wxFrame.timer["sb"] = wx.CallLater(delTime, showStatusBarMsg,
+                                           wxFrame, '') 
+
 
 #-------------------------------------------------------------------------------
 

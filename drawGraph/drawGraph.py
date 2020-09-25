@@ -37,10 +37,14 @@ with this program.  If not, see <http://www.gnu.org/licenses/>.
 Changelog -----
 v.0.1.1: Initial development (for viruses in ants of Lumi Viljakainen).
 v.0.1.20200818: Refactoring + heatmap graph for Linda Sartoris's work
+v.0.1.20200925: Updating heatmap for Linda to save raw data, including
+    heatmap matrix & some ant blob information in CSV format.
+    The ant blob information is also displayed in debug mode.
 """
 
 import sys, queue
-from os import path, mkdir
+from os import path, mkdir, remove
+from shutil import copyfile
 from glob import glob
 from copy import copy
 
@@ -59,7 +63,7 @@ from modProcGraph import ProcGraphData
 from modVideoRW import VideoRW
 
 DEBUG = False 
-__version__ = "0.1.20200818"
+__version__ = "0.1.20200925"
 
 #===============================================================================
 
@@ -78,9 +82,13 @@ class GraphDrawerFrame(wx.Frame):
         if DEBUG: print("GraphDrawerFrame.__init__()")
         
         ### init 
-        wPos = (0, 20)
         wg = wx.Display(0).GetGeometry()
-        wSz = (wg[2], int(wg[3]*0.9))
+        if sys.platform.startswith("win"):
+            wPos = (-5, 0)
+            wSz = (wg[2], int(wg[3]*0.85))
+        else:
+            wPos = (0, 20)
+            wSz = (wg[2], int(wg[3]*0.9))
         wx.Frame.__init__(
               self,
               None,
@@ -99,8 +107,10 @@ class GraphDrawerFrame(wx.Frame):
         ### set up status-bar
         self.statusbar = self.CreateStatusBar(1)
         self.sbBgCol = self.statusbar.GetBackgroundColour()
-        # frame resizing
-        updateFrameSize(self, (wSz[0], wSz[1]+self.statusbar.GetSize()[1]))
+        ### frame resizing
+        if sys.platform.startswith("win"): _wSz = wSz
+        else: _wSz = (wSz[0], wSz[1]+self.statusbar.GetSize()[1])
+        updateFrameSize(self, _wSz)
         
         ##### [begin] setting up attributes -----
         self.wSz = wSz
@@ -133,162 +143,88 @@ class GraphDrawerFrame(wx.Frame):
         self.graphType = self.graphTypeChoices[0].split(":")[0].strip()
         ##### [end] setting up attributes -----
          
-        ### create panels
-        for k in pi.keys():
-            self.panel[k] = SPanel.ScrolledPanel(self, 
-                                                 pos=pi[k]["pos"],
-                                                 size=pi[k]["sz"],
-                                                 style=pi[k]["style"])
-            self.panel[k].SetBackgroundColour(pi[k]["bgCol"])
-        
-        ### set up middle panel (graph panel)
+        ### create panels and its widgets
+        btnSz = (35, 35)
+        vlSz = (-1, 20) # size of vertical line separator
+        for pk in pi.keys():
+            self.panel[pk] = SPanel.ScrolledPanel(self, 
+                                                  pos=pi[pk]["pos"],
+                                                  size=pi[pk]["sz"],
+                                                  style=pi[pk]["style"])
+            self.panel[pk].SetBackgroundColour(pi[pk]["bgCol"])
+            self.gbs[pk] = wx.GridBagSizer(0,0)
+            w = [] # each itme represents a row in the left panel
+            if pk == "tp":
+                w.append([
+                    {"type":"sTxt", "label":"Graph type:", "nCol":1,
+                     "fgColor":"#cccccc"},
+                    {"type":"cho", "nCol":1, "name":"graphType",
+                     "choices":self.graphTypeChoices, 
+                     "val":self.graphTypeChoices[0]},
+                    {"type":"btn", "nCol":1, "name":"open", "size":btnSz,
+                     "img":path.join(FPATH,"btn_imgs","open.png")},
+                    {"type":"txt", "nCol":1, "name":"inputFP", 
+                     "val":"[Opened input file]", "style":wx.TE_READONLY,
+                     "size":(300,-1), "fgColor":"#cccccc"},
+                    {"type":"sLn", "nCol":1, "size":vlSz, 
+                     "style":wx.LI_VERTICAL},
+                    {"type":"chk", "nCol":1, "name":"debug", "label":"debug", 
+                     "val":self.debugging, "style":wx.CHK_2STATE, 
+                     "fgColor":"#cccccc"},
+                    {"type":"sTxt", "nCol":1, "fgColor":"#cccccc",
+                     "label":"frames to jump for debugging:"},
+                    {"type":"txt", "nCol":1, "name":"debugFrameIntv", 
+                     "val":"1", "numOnly":True, "size":(50,-1)}
+                    ])
+            elif pk == "bm":
+                w.append([
+                    {"type":"sTxt", "label":"Saving resolution :", "nCol":1,
+                     "fgColor":"#cccccc"},
+                    {"type":"txt", "nCol":1, "name":"imgSavResW", 
+                     "val":str(int(pi["mp"]["sz"][1]*1.3333)),
+                     "size":(100,-1), "numOnly":True},
+                    {"type":"txt", "nCol":1, "name":"imgSavResH", 
+                     "val":str(pi["mp"]["sz"][1]),
+                     "size":(100,-1), "numOnly":True},
+                    {"type":"btn", "nCol":1, "name":"save", "size":btnSz,
+                     "img":path.join(FPATH,"btn_imgs","save.png"),
+                     "tooltip":"Save graph"},
+                    {"type":"sLn", "nCol":1, "size":vlSz, 
+                     "style":wx.LI_VERTICAL},
+                    {"type":"btn", "nCol":1, "name":"saveRawData", "size":btnSz,
+                     "img":path.join(FPATH,"btn_imgs","saveR.png"),
+                     "tooltip":"Save raw data as CSV"}
+                    ])
+            elif pk == "br":
+                w.append([
+                    {"type":"btn", "nCol":1, "name":"saveAll", "size":btnSz,
+                     "img":path.join(FPATH,"btn_imgs","save.png"),
+                     "tooltip":"Save all graphs"},
+                    {"type":"sLn", "nCol":1, "size":vlSz, 
+                     "style":wx.LI_VERTICAL},
+                    {"type":"btn", "nCol":1, "name":"saveAllRawData", 
+                     "size":btnSz,
+                     "img":path.join(FPATH,"btn_imgs","saveR.png"),
+                     "tooltip":"Save all raw data as CSV"}
+                    ])
+            if w != []: addWxWidgets(w, self, pk) 
+            self.panel[pk].SetSizer(self.gbs[pk])
+            self.gbs[pk].Layout()
+            self.panel[pk].SetupScrolling()
+            
+        ### Bind events to the middle panel (graph panel)
         self.panel["mp"].Bind(wx.EVT_PAINT, self.onPaintMP)
         self.panel["mp"].Bind(wx.EVT_LEFT_UP, self.onClickGraph)
         self.panel["mp"].Bind(wx.EVT_RIGHT_UP, self.onMouseRClick)
         #self.panel["mp"].Bind(wx.EVT_MOTION, self.onMouseMove)
 
-        ##### [begin] set up top panel -----
-        pk = "tp"
-        btnSz = (35, 35)
-        vlSz = (-1, 20) # size of vertical line separator
-        self.gbs[pk] = wx.GridBagSizer(0,0)
-        row = 0; col = 0
-        sTxt = wx.StaticText(self.panel[pk], 
-                             -1,
-                             label="Graph type:")
-        sTxt.SetForegroundColour("#cccccc")
-        add2gbs(self.gbs[pk], sTxt, (row,col), (1,1))
-        col += 1
-        cho = wx.Choice(self.panel[pk], 
-                        -1, 
-                        choices=self.graphTypeChoices,
-                        name="graphType_cho",
-                        size=(150,-1))
-        cho.SetSelection(0)
-        cho.Bind(wx.EVT_CHOICE, self.onChoice)
-        add2gbs(self.gbs[pk], cho, (row,col), (1,1))
-        col += 1 
-        btn = wx.Button(self.panel[pk],
-                        -1,
-                        size=btnSz,
-                        name="open_btn")
-        set_img_for_btn(path.join(FPATH, "btn_imgs", "open.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs[pk], btn, (row,col), (1,1))
-        col += 1
-        txt = wx.TextCtrl(self.panel[pk], 
-                          -1,
-                          name="inputFP_txt",
-                          value="[Opened input file]",
-                          size=(300,-1),
-                          style=wx.TE_READONLY)
-        txt.SetBackgroundColour("#cccccc")
-        add2gbs(self.gbs[pk], txt, (row,col), (1,1))
-        col += 1
-        add2gbs(self.gbs[pk],
-                wx.StaticLine(self.panel[pk],
-                              -1,
-                              size=vlSz,
-                              style=wx.LI_VERTICAL),
-                (row,col),
-                (1,1)) # vertical line separator 
-        col += 1
-        chk = wx.CheckBox(self.panel[pk],
-                          id=-1,
-                          label="debug",
-                          name="debug_chk",
-                          style=wx.CHK_2STATE)
-        chk.SetValue(self.debugging)
-        chk.Bind(wx.EVT_CHECKBOX, self.onCheckBox)
-        chk.SetForegroundColour('#CCCCCC')
-        add2gbs(self.gbs[pk], chk, (row,col), (1,1))
-        ### 
-        self.panel[pk].SetSizer(self.gbs[pk])
-        self.gbs[pk].Layout()
-        self.panel[pk].SetupScrolling()
-        ##### [end] set up top panel -----
-
         self.initMLWidgets() # set up middle left panel
-        
-        ##### [begin] set up bottom middle panel [graph saving] -----
-        pk = "bm"
-        row = 0; col = 0
-        self.gbs[pk] = wx.GridBagSizer(0,0)
-        sTxt = wx.StaticText(self.panel[pk], 
-                             -1,
-                             label="Saving resolution :")
-        sTxt.SetForegroundColour("#cccccc")
-        add2gbs(self.gbs[pk], sTxt, (row,col), (1,1), bw=20,
-                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
-        col += 1
-        txt = wx.TextCtrl(self.panel[pk],
-                          -1,
-                          value=str(int(pi["mp"]["sz"][1]*1.3333)),
-                          size=(100,-1),
-                          name="imgSavResW_txt")
-        txt.Bind(wx.EVT_CHAR, 
-                 lambda event: self.onTextCtrlChar(event, isNumOnly=True)) 
-        add2gbs(self.gbs[pk], txt, (row,col), (1,1), bw=2,
-                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
-        col += 1
-        txt = wx.TextCtrl(self.panel[pk],
-                          -1,
-                          value=str(pi["mp"]["sz"][1]),
-                          size=(100,-1),
-                          name="imgSavResH_txt")
-        txt.Bind(wx.EVT_CHAR, 
-                 lambda event: self.onTextCtrlChar(event, isNumOnly=True)) 
-        add2gbs(self.gbs[pk], txt, (row,col), (1,1), bw=2,
-                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
-        col += 1
-        btn = wx.Button(self.panel[pk],
-                        -1,
-                        name="saveGraph_btn",
-                        pos=(int(pi[pk]["sz"][0]*0.95), 1),
-                        size=btnSz, 
-                        )
-        set_img_for_btn(path.join(FPATH, "btn_imgs", "save.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs[pk], btn, (row,col), (1,1), bw=10,
-                flag=wx.ALIGN_CENTER_VERTICAL|wx.LEFT)
-        self.panel[pk].SetSizer(self.gbs[pk])
-        self.gbs[pk].Layout()
-        self.panel[pk].SetupScrolling()
-        ##### [end] set up bottom middle panel [graph saving] -----
       
-        ##### [begin] set up middle right panel -----
-        pk = "mr"
-        self.gbs[pk] = wx.GridBagSizer(0,0)
-        ### 
-        self.panel[pk].SetSizer(self.gbs[pk])
-        self.gbs[pk].Layout()
-        self.panel[pk].SetupScrolling()
-        ##### [end] set up middle right panel -----
-
-        ##### [begin] set up bottom right panel -----
-        pk = "br"
-        self.gbs[pk] = wx.GridBagSizer(0,0)
-        pSz = pi[pk]["sz"]
-        row = 0; col = 0
-        btn = wx.Button(self.panel[pk],
-                        -1,
-                        size=btnSz,
-                        name="saveAll_btn")
-        set_img_for_btn(path.join(FPATH, "btn_imgs", "saveAll.png"), btn) 
-        btn.Bind(wx.EVT_LEFT_DOWN, self.onButtonPressDown)
-        add2gbs(self.gbs[pk], btn, (row,col), (1,1), 10, wx.LEFT)
-        self.panel[pk].SetSizer(self.gbs[pk])
-        self.gbs[pk].Layout()
-        ##### [end] set up bottom right panel -----
-         
         ### keyboard binding
         exitId = wx.NewIdRef(count=1)
-        saveId = wx.NewIdRef(count=1)
         self.Bind(wx.EVT_MENU, self.onClose, id = exitId)
-        self.Bind(wx.EVT_MENU, self.saveGraph, id = saveId)
         accel_tbl = wx.AcceleratorTable([
                             (wx.ACCEL_CTRL,  ord('Q'), exitId),
-                            (wx.ACCEL_CTRL,  ord('S'), saveId),
                                         ])
         self.SetAcceleratorTable(accel_tbl)
          
@@ -333,43 +269,39 @@ class GraphDrawerFrame(wx.Frame):
 
         wSz = self.wSz 
         pi = {} # information of panels
+        if sys.platform.startswith("win"):
+            style = (wx.TAB_TRAVERSAL|wx.SIMPLE_BORDER)
+            bgCol = "#777777"
+        else:
+            style = (wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
+            bgCol = "#333333"
+
         # top panel for major buttons
-        pi["tp"] = dict(pos=(0, 0), 
-                        sz=(wSz[0], 50), 
-                        bgCol="#333333", 
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
+        pi["tp"] = dict(pos=(0, 0), sz=(wSz[0], 50), bgCol=bgCol, style=style)
         tpSz = pi["tp"]["sz"]
         # middle left panel
-        pi["ml"] = dict(pos=(0, tpSz[1]), 
-                        sz=(int(wSz[0]*0.2), wSz[1]-tpSz[1]),
-                        bgCol="#333333",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
+        pi["ml"] = dict(pos=(0, tpSz[1]), sz=(int(wSz[0]*0.2), wSz[1]-tpSz[1]),
+                        bgCol=bgCol, style=style)
         mlSz = pi["ml"]["sz"] 
         savH = 50 # height for saving interface for graph image/video
         gph = wSz[1]-tpSz[1]-savH # graph height
         gpw = int(gph * (4/3)) # graph width
         # middle panel
-        pi["mp"] = dict(pos=(mlSz[0], tpSz[1]),
-                        sz=(gpw, gph), 
-                        bgCol="#333333",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
+        pi["mp"] = dict(pos=(mlSz[0], tpSz[1]), sz=(gpw, gph), 
+                        bgCol=bgCol, style=style)
         mpSz = pi["mp"]["sz"]
         # bottom panel (for showing graph image saving interface)
-        pi["bm"] = dict(pos=(mlSz[0], wSz[1]-savH),
-                        sz=(mpSz[0], savH),
-                        bgCol="#333333",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER) 
+        pi["bm"] = dict(pos=(mlSz[0], wSz[1]-savH), sz=(mpSz[0], savH),
+                        bgCol=bgCol, style=style)
         bmSz = pi["bm"]["sz"]
         # right panel (for showing frame images)
         pi["mr"] = dict(pos=(mlSz[0]+mpSz[0], tpSz[1]),
                         sz=(wSz[0]-mlSz[0]-mpSz[0], wSz[1]-tpSz[1]-savH),
-                        bgCol="#333333",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER)
+                        bgCol=bgCol, style=style)
         # panel for showing graph video saving interface 
         pi["br"] = dict(pos=(pi["mr"]["pos"][0], wSz[1]-savH),
                         sz=(pi["mr"]["sz"][0], savH),
-                        bgCol="#333333",
-                        style=wx.TAB_TRAVERSAL|wx.SUNKEN_BORDER) 
+                        bgCol=bgCol, style=style) 
         return pi
 
     #---------------------------------------------------------------------------
@@ -399,124 +331,78 @@ class GraphDrawerFrame(wx.Frame):
         ##### [begin] set up middle left panel -----
         w = [] # each itme represents a row in the left panel 
         if self.graphType == "L2020":
-            ### widgets for color of ant body
-            h=0; s=0; v=0 # color1 min HSV
-            rgbVal = cvHSV2RGB(h, s, v)
-            w.append([{"type":"sTxt", "label":"Color0 [HSV-min.]", "nCol":2},
+            ##### [begin] set widgets for HSV colors to track -----
+            self.defHSVVal = {}
+            self.defHSVVal["col0"] = {} # ant body color
+            self.defHSVVal["col0"]["min"] = (0, 0, 0)
+            self.defHSVVal["col0"]["max"] = (180, 150, 100)
+            self.defHSVVal["col1"] = {} # color markers
+            self.defHSVVal["col1"]["min"] = (50, 80, 80)
+            self.defHSVVal["col1"]["max"] = (180, 255, 200)
+            self.defHSVVal["col2"] = {} # yellow color marker
+            self.defHSVVal["col2"]["min"] = (10, 200, 150)
+            self.defHSVVal["col2"]["max"] = (30, 255, 250)
+            for ci in range(3): # three color ranges
+                for mLbl in ["min", "max"]: # HSV min & max values
+                    ck = "col%i"%(ci)
+                    col = dict(H=0, S=0, V=0)
+                    col["H"], col["S"], col["V"] = self.defHSVVal[ck][mLbl]
+                    rgbVal = cvHSV2RGB(col["H"], col["S"], col["V"])
+                    w.append([
+                      {"type":"sTxt", "label":"Color%i [HSV-%s.]"%(ci, mLbl), 
+                       "nCol":2},
                       {"type":"panel", "nCol":1, "bgColor":rgbVal,
-                       "size":(20,20), "name":"col0Min"}])
-            w.append([{"type":"sld", "name":"col0HMin", "value":h, "nCol":1,
-                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col0SMin", "value":s, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col0VMin", "value":v, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)}])
-            h=180; s=140; v=100 # color1 max HSV
-            rgbVal = cvHSV2RGB(h, s, v)
-            w.append([{"type":"sTxt", "label":"Color0 [HSV-max.]", "nCol":2},
-                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
-                       "size":(20,20), "name":"col0Max"}])
-            w.append([{"type":"sld", "name":"col0HMax", "value":h, "nCol":1,
-                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col0SMax", "value":s, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col0VMax", "value":v, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)}])
-            w.append([{"type":"sLn", "size":(int(pSz[0]*0.9),-1), "nCol":3,
-                       "style":wx.LI_HORIZONTAL}])
+                       "size":(20,20), "name":"col%i%s"%(ci, mLbl.capitalize())}
+                      ])
+                    tmp = []
+                    for k in ["H", "S", "V"]:
+                        if k == "H": maxVal = 180
+                        else: maxVal = 255
+                        tmp.append(
+                            {"type":"sld", "nCol":1, "val":col[k],
+                             "name":"col%i%s%s"%(ci, k, mLbl.capitalize()), 
+                             "size":(int(pSz[0]*0.3), -1), "border":1,
+                             "minValue":0, "maxValue":maxVal, 
+                             "style":wx.SL_VALUE_LABEL}
+                            )
+                    w.append(tmp) 
+            ##### [end] set widgets for HSV colors to track -----
             
-            ### widgets for color markers (except yellow)
-            h=50; s=80; v=80 # color2 min HSV
-            rgbVal = cvHSV2RGB(h, s, v)
-            w.append([{"type":"sTxt", "label":"Col-1 [HSV-min.]", "nCol":2},
-                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
-                       "size":(20,20), "name":"col1Min"}])
-            w.append([{"type":"sld", "name":"col1HMin", "value":h, "nCol":1,
-                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col1SMin", "value":s, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col1VMin", "value":v, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)}])
-            h=180; s=255; v=200 # color2 max HSV
-            rgbVal = cvHSV2RGB(h, s, v)
-            w.append([{"type":"sTxt", "label":"Col-1 [HSV-max.]", "nCol":2},
-                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
-                       "size":(20,20), "name":"col1Max"}])
-            w.append([{"type":"sld", "name":"col1HMax", "value":h, "nCol":1,
-                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col1SMax", "value":s, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col1VMax", "value":v, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)}])
-            w.append([{"type":"sLn", "size":(int(pSz[0]*0.9),-1), "nCol":3,
-                       "style":wx.LI_HORIZONTAL}])
-            
-            ### widgets for yellow color markers
-            h=10; s=200; v=150 # color3 min HSV
-            rgbVal = cvHSV2RGB(h, s, v)
-            w.append([{"type":"sTxt", "label":"Col-2 [HSV-min.]", "nCol":2},
-                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
-                       "size":(20,20), "name":"col2Min"}])
-            w.append([{"type":"sld", "name":"col2HMin", "value":h, "nCol":1,
-                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col2SMin", "value":s, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col2VMin", "value":v, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)}])
-            h=30; s=255; v=250 # color3 max HSV
-            rgbVal = cvHSV2RGB(h, s, v)
-            w.append([{"type":"sTxt", "label":"Col-2 [HSV-max.]", "nCol":2},
-                      {"type":"panel", "nCol":1, "bgColor":rgbVal,
-                       "size":(20,20), "name":"col2Max"}])
-            w.append([{"type":"sld", "name":"col2HMax", "value":h, "nCol":1,
-                       "minValue":0, "maxValue":180, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col2SMax", "value":s, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)},
-                      {"type":"sld", "name":"col2VMax", "value":v, "nCol":1,
-                       "minValue":0, "maxValue":255, "style":wx.SL_VALUE_LABEL,
-                       "size":(int(pSz[0]*0.3), -1)}])
-            w.append([{"type":"sLn", "size":(int(pSz[0]*0.9),-1), "nCol":3,
+            ### widgets for button to set HSV colors back to default 
+            w.append([{"type":"btn", "size":(int(pSz[0]*0.85),-1), "nCol":3,
+                       "name":"resetHSV", 
+                       "label":"Reset all HSV values to default"}])
+            w.append([{"type":"sLn", "size":(int(pSz[0]*0.85),-1), "nCol":3,
                        "style":wx.LI_HORIZONTAL}])
             
             ### widgets for changing color scheme
-            w.append([{"type":"sTxt", "label":"Background color", "nCol":1},
+            w.append([{"type":"sTxt", "label":"Background color", "nCol":2},
                       {"type":"cPk", "nCol":1, "color":(0,0,0), 
-                       "name":"bgCol"}])
-            w.append([{"type":"sTxt", "label":"Low heat color", "nCol":1}])
+                       "name":"bgCol", "size":(60,-1)}])
+            #w.append([{"type":"sTxt", "label":"Low heat color", "nCol":1}])
             
             ### widgets for frame range to calculate heatmap
-            w.append([{"type":"sTxt", "label":"start-frame", "nCol":1},
-                      {"type":"txt", "name":"startFrame", "value":"0",
-                       "nCol":1, "numOnly":True}])
-            w.append([{"type":"sTxt", "label":"end-frame", "nCol":1},
-                      {"type":"txt", "name":"endFrame", "value":"1",
-                       "nCol":1, "numOnly":True}])
+            w.append([{"type":"sTxt", "label":"start-frame", "nCol":2},
+                      {"type":"txt", "name":"startFrame", "val":"0",
+                       "nCol":1, "numOnly":True, "size":(60,-1)}])
+            w.append([{"type":"sTxt", "label":"end-frame", "nCol":2},
+                      {"type":"txt", "name":"endFrame", "val":"1",
+                       "nCol":1, "numOnly":True, "size":(60,-1)}])
             ### widgets for frame intervals for heatmap generation
-            w.append([{"type":"sTxt", "label":"frame-interval", "nCol":1},
-                      {"type":"txt", "name":"frameIntv", "value":"1",
-                       "nCol":1, "numOnly":True}])
+            w.append([{"type":"sTxt", "label":"frame-interval", "nCol":2},
+                      {"type":"txt", "name":"frameIntv", "val":"1",
+                       "nCol":1, "numOnly":True, "size":(60,-1)}])
+            ### widgets for minimum area of an ant
+            w.append([{"type":"sTxt", "label":"ant min. area", "nCol":2},
+                      {"type":"txt", "name":"aMinArea", "val":"100",
+                       "nCol":1, "numOnly":True, "size":(60,-1)}])
             ### button widget to draw the graph
             w.append([{"type":"btn", "name":"draw", "label":"Draw heatmap",
-                       "nCol":2}])
+                       "nCol":3}])
         self.gbs[pk] = wx.GridBagSizer(0,0) 
-        self.mlWid, __ = addWxWidgets(w, self, pk) 
+        self.mlWid, pSz = addWxWidgets(w, self, pk)
+        if pSz[0] > self.pi[pk]["sz"][0]:
+            self.panel[pk].SetSize(pSz[0], self.pi[pk]["sz"][1])
         ### 
         self.panel[pk].SetSizer(self.gbs[pk])
         self.gbs[pk].Layout()
@@ -547,18 +433,37 @@ class GraphDrawerFrame(wx.Frame):
 
         if objName == "open_btn": self.openInputFile()
 
-        elif objName == "saveGraph_btn": self.saveGraph(None)
+        elif objName == "save_btn": self.save()
 
-        elif objName == "saveAll_btn": self.saveGraph(None, "saveAll") 
+        elif objName == "saveAll_btn": self.save(isSavingAll=True) 
+
+        elif objName == "saveRawData_btn": self.save(savType="raw")
+        
+        elif objName == "saveAllRawData_btn": self.save("raw", True)
+
+        elif objName == "resetHSV_btn":
+            for ci in range(3): # three color ranges
+                for mLbl in ["min", "max"]: # HSV min & max values
+                    ck = "col%i"%(ci)
+                    col = dict(H=0, S=0, V=0)
+                    col["H"], col["S"], col["V"] = self.defHSVVal[ck][mLbl]
+                    for k in ["H", "S", "V"]:
+                        sldN = "col%i%s%s_sld"%(ci, k, mLbl.capitalize())
+                        sld = wx.FindWindowByName(sldN, self.panel["ml"])
+                        sld.SetValue(col[k])
+                    pN = "%s%s_panel"%(ck, mLbl.capitalize()) 
+                    rgbVal = cvHSV2RGB(col["H"], col["S"], col["V"])
+                    obj = wx.FindWindowByName(pN, self.panel["ml"])
+                    obj.SetBackgroundColour(rgbVal)
+                    obj.Refresh()
        
         elif objName == "draw_btn":
-            dc = wx.PaintDC(self.panel["mp"])
             if self.graphType == "L2020":
             # Heatmap for Linda (2020)
                 self.pgd.graphImg = []
                 self.pgd.graphImgIdx = 0
                 if self.debugging:
-                    self.pgd.graphL2020(dc, -1, -1, self.q2m)
+                    self.pgd.graphL2020(self.mpDC, -1, -1, self.q2m)
                     self.panel["mp"].Refresh() # display graph 
                 else:
                     for i, w in enumerate(self.mrWid): # widgets in the panel
@@ -620,7 +525,8 @@ class GraphDrawerFrame(wx.Frame):
         if objName == "debug_chk":
             self.debugging = objVal
             if self.debugging:
-                self.vRW.initReader(self.inputFP) # init video reader
+                if hasattr(self, "vRW") and self.inputFP != "":
+                    self.vRW.initReader(self.inputFP) # init video reader
     
     #---------------------------------------------------------------------------
     
@@ -679,6 +585,7 @@ class GraphDrawerFrame(wx.Frame):
             objName = "%s%s_panel"%(colN, minOrMax) 
             obj = wx.FindWindowByName(objName, self.panel["ml"])
             obj.SetBackgroundColour(rgbVal)
+            obj.Refresh()
 
     #---------------------------------------------------------------------------
     
@@ -727,6 +634,8 @@ class GraphDrawerFrame(wx.Frame):
         
         self.makeModal(False)
         stopAllTimers(self.timer)
+        for fp in glob("tmp_*.*"):
+            if path.isfile(fp): remove(fp)
         self.Destroy()
     
     #---------------------------------------------------------------------------
@@ -761,8 +670,8 @@ class GraphDrawerFrame(wx.Frame):
             style = (wx.DD_DEFAULT_STYLE|wx.DD_DIR_MUST_EXIST) 
             dlg = wx.DirDialog(self, t, defDir, style=style)
         if dlg.ShowModal() == wx.ID_CANCEL: return
-        dlg.Destroy()
         inputFP = dlg.GetPath()
+        dlg.Destroy()
          
         ### display input file path
         self.inputFP = inputFP
@@ -849,6 +758,7 @@ class GraphDrawerFrame(wx.Frame):
         event.Skip()
         
         dc = wx.PaintDC(self.panel["mp"])
+        self.mpDC = dc
         gImg = self.pgd.graphImg
         if len(gImg) == 0: return
         idx = self.pgd.graphImgIdx
@@ -882,7 +792,7 @@ class GraphDrawerFrame(wx.Frame):
         if rData == None: return
 
         if rData[0] == "displayMsg":
-            self.showStatusBarMsg(rData[1], -1)
+            showStatusBarMsg(self, rData[1], -1)
             return
         
         elif rData[0].startswith("finished"):
@@ -1022,7 +932,7 @@ class GraphDrawerFrame(wx.Frame):
         if DEBUG: print("GraphDrawerFrame.callbackFunc()")
 
         if flag == "drawGraph":
-            self.showStatusBarMsg("Heatmap generated.", 3000)
+            showStatusBarMsg(self, "Heatmap generated.", 3000)
             idx = len(self.pgd.graphImg)-1
             self.pgd.graphImgIdx = idx 
             ### display thumbnail image of the generated graph 
@@ -1045,7 +955,7 @@ class GraphDrawerFrame(wx.Frame):
                                  self.pgd.graphL2020, args)
 
             elif self.graphType == "J2020":
-                self.showStatusBarMsg("Graph generated.", 3000)
+                showStatusBarMsg(self, "Graph generated.", 3000)
                 ai = len(self.pgd.graphImg)
                 if ai < 4: # there are more ants to process
                     wx.CallLater(5, startHeavyTask, self, "drawGraph", 
@@ -1058,7 +968,7 @@ class GraphDrawerFrame(wx.Frame):
                 msg = 'Saved\n'
                 msg += path.basename(self.imgFP4sav) + "\n"
                 msg += " in output folder."
-                self.showStatusBarMsg(msg, 3000)
+                showStatusBarMsg(self, msg, 3000)
                 del self.bmp4sav
                 del self.imgFP4sav
         
@@ -1082,12 +992,12 @@ class GraphDrawerFrame(wx.Frame):
     
     #---------------------------------------------------------------------------
     
-    def saveGraph(self, event, flag=""):
-        """ Save the current graph and CSV
+    def save(self, savType="graph", isSavingAll=False):
+        """ Save data 
 
         Args:
-            event (wx.Event)
-            flag (str)
+            savType (str): graph; saving graph, raw: saving raw data
+            isSavingAll (bool): saving the current graph or all graph
 
         Returns:
             None
@@ -1098,7 +1008,7 @@ class GraphDrawerFrame(wx.Frame):
 
         ### save graph
         if self.graphType == "L2020":
-            if flag == "saveAll": idxRng = range(len(self.pgd.graphImg))
+            if isSavingAll: idxRng = range(len(self.pgd.graphImg))
             else: idxRng = [self.pgd.graphImgIdx]
             msg = "Saved\n"
             for idx in idxRng:
@@ -1106,23 +1016,38 @@ class GraphDrawerFrame(wx.Frame):
                 #timestamp = get_time_stamp().replace("_","")[:14]
                 fn = path.basename(self.inputFP) # current input file name 
                 ext = "." + fn.split(".")[-1]
-                graphImg = self.pgd.graphImg
-                newTxt = "_graph_%s"%(graphImg[idx]["startFrame"])
-                newTxt += "_%s.png"%(graphImg[idx]["endFrame"]) 
+                if savType == "graph": sExt = ".png"
+                elif savType == "raw": sExt = ".csv"
+                data = self.pgd.graphImg[idx]
+                newTxt = "_%s_%s"%(savType, data["startFrame"])
+                newTxt += "_%s%s"%(data["endFrame"], sExt) 
                 newFN = fn.replace(ext, newTxt)
-                imgFP4sav = self.inputFP.replace(fn, newFN)
-                # get image to save 
-                img = cv2.imread("origImg%i.png"%(idx))
-                ### resize if required 
-                obj = wx.FindWindowByName("imgSavResW_txt", self.panel["bm"])
-                w = int(obj.GetValue())
-                obj = wx.FindWindowByName("imgSavResH_txt", self.panel["bm"])
-                h = int(obj.GetValue())
-                if w != img.shape[1] or h != img.shape[0]:
-                    img = cv2.resize(img, (w,h), interpolation=cv2.INTER_CUBIC)
-                # save
-                cv2.imwrite(imgFP4sav, img)
-                msg += imgFP4sav + "\n\n"
+                fp4sav = self.inputFP.replace(fn, newFN)
+                if savType == "graph":
+                    # get image to save 
+                    img = cv2.imread("tmp_origImg%i.png"%(idx))
+                    ### resize if required 
+                    obj = wx.FindWindowByName("imgSavResW_txt", 
+                                              self.panel["bm"])
+                    w = int(obj.GetValue())
+                    obj = wx.FindWindowByName("imgSavResH_txt", 
+                                              self.panel["bm"])
+                    h = int(obj.GetValue())
+                    if w != img.shape[1] or h != img.shape[0]:
+                        img = cv2.resize(img, 
+                                         (w,h), 
+                                         interpolation=cv2.INTER_CUBIC)
+                    # save
+                    cv2.imwrite(fp4sav, img)
+                    msg += fp4sav + "\n\n"
+                elif savType == "raw":
+                    for fp in glob("tmp_data*%s"%(sExt)):
+                        tmp = fp.replace(sExt, "").split("_")
+                        if tmp[2] == str(idx): # matches graph index
+                            newFP = fp4sav.replace(sExt, 
+                                                   "_%s%s"%(tmp[-1], sExt))
+                            copyfile(fp, newFP)
+                            msg += newFP + "\n\n"
         
         """
         ### save CSV
@@ -1221,42 +1146,6 @@ class GraphDrawerFrame(wx.Frame):
         msg = "Finished script running"
         msg2 = 'Script was executed.'
         q2m.put((msg,msg2,csvTxt,), True, None)
-
-    #---------------------------------------------------------------------------
-
-    def showStatusBarMsg(self, txt, delTime=5000):
-        """ Show message on status bar
-
-        Args:
-            txt (str): Text to show on status bar
-            delTime (int): Duration (in milliseconds) to show the text
-
-        Returns:
-            None
-        """
-        if DEBUG: print("GraphDrawerFrame.showStatusBarMsg()")
-
-        if self.timer["sb"] != None:
-            ### stop status-bar timer
-            self.timer["sb"].Stop()
-            self.timer["sb"] = None
-        
-        # show text on status bar 
-        self.statusbar.SetStatusText(txt)
-        
-        ### change status bar color
-        if txt == '': bgCol = self.sbBgCol 
-        else: bgCol = '#33aa33'
-        self.statusbar.SetBackgroundColour(bgCol)
-
-        if txt != '' and delTime != -1:
-        # showing message and deletion time was given.
-            # schedule to delete the shown message
-            self.timer["sb"] = wx.CallLater(delTime,
-                                            self.showStatusBarMsg,
-                                            '') 
-
-
 
     #---------------------------------------------------------------------------
 

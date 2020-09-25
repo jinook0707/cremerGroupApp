@@ -18,10 +18,11 @@ import wx, cv2
 import numpy as np
 
 from modFFC import *
+from modCVFunc import *
 
 DEBUG = False
 
-#=======================================================================
+#===============================================================================
 
 class ProcGraphData():
     """ Class for processing data and generate graph.
@@ -52,7 +53,7 @@ class ProcGraphData():
         self.uiTask["showThisClassOnly"] = None 
         ##### [end] setting up attributes on init. -----
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def initOnDataLoading(self, inputFP):
         """ init. process when input file was loaded
@@ -110,7 +111,7 @@ class ProcGraphData():
                               a02 = dict(day=(255,0,0), night=(128,0,0)),
                               a03 = dict(day=(255,0,255), night=(128,0,128)))
    
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def storeGraphImg(self, img, sz):
         """ store graph image after resizing, if necessary 
@@ -125,7 +126,7 @@ class ProcGraphData():
         if DEBUG: print("ProcGraphData.storeGraphImg()")
 
         print("[ProcGraphData.storeGraphImg] saving original image..")
-        fn = "origImg%i.png"%(len(self.graphImg))
+        fn = "tmp_origImg%i.png"%(len(self.graphImg))
         cv2.imwrite(fn, img) # store original image as file
         self.graphImg.append({})
         
@@ -152,11 +153,57 @@ class ProcGraphData():
         ### store thumbnail images
         print("[ProcGraphData.storeGraphImg] storing thumbnail image..")
         r = img.shape[0] / img.shape[1]
-        w = int(self.parent.pi["mr"]["sz"][0]*0.45)
+        w = int(self.parent.pi["mr"]["sz"][0]*0.4)
         h = int(w * r)
-        self.graphImg[-1]["thumbnail"] = wxImg.Scale(w, h) 
+        self.graphImg[-1]["thumbnail"] = wxImg.Scale(w, h)
+
+    #---------------------------------------------------------------------------
+  
+    def storeGraphData(self, data = []):
+        """ Store data related to graph. 
+        Assumes that corresponding graph is already stored in self.graphImg.
+
+        Args:
+            data (list): Graph related data. Could be multiple data.
+
+        Returns:
+            None
+        """ 
+        if DEBUG: print("ProcGraphData.storeGraphData()")
+
+        gIdx = len(self.graphImg) - 1
+        if gIdx == -1: return
+        for di in range(len(data)):
+            d = data[di]
+            fn = "tmp_data_%i_%i.csv"%(gIdx, di)
+            if type(d) == np.ndarray:
+                np.savetxt(fn, d, newline="\n", delimiter=",")
+            elif type(d) == list:
+                if self.parent.graphType == "L2020": 
+                    colTitles = ['centroid', 'rect', 'rectL', 'bRects']
+                    fh = open(fn, "w")
+                    # write column titles
+                    fh.write(str(colTitles).strip("[]").replace("'","")+"\n")
+                    for li in range(len(d)): # go though lines (frame data)
+                        line = ""
+                        for ki, k in enumerate(colTitles):
+                            _d = d[li][k]
+                            if k == "bRects":
+                                for bi in range(len(_d)):
+                                # go through rects of ant blob data
+                                    line += str(_d[bi]).strip("[]") \
+                                                       .replace(",","/")
+                                    line += ", "
+                                line = line.rstrip(", ")
+                            else:
+                                # other data are tuple of rect or coordinate
+                                line += str(_d).strip("()").replace(",","/")
+                            line += ", "
+                        line = line.rstrip(", ") + "\n"
+                        fh.write(line)
+                    fh.close()
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def graphL2020(self, startFrame, endFrame, q2m, flag=""):
         """ Draw heatmap of ants' positions in structured/unstructured nest.
@@ -174,25 +221,60 @@ class ProcGraphData():
 
         def findAntCols(fImg):
         # function to find ants by colors
-            HSV_img = cv2.cvtColor(fImg, cv2.COLOR_BGR2HSV)
-            fcRslt = cv2.inRange(HSV_img, HSVp["mi"][0], HSVp["ma"][0])
+            hsvImg = cv2.cvtColor(fImg, cv2.COLOR_BGR2HSV)
+            fcRslt = cv2.inRange(hsvImg, hsvP["mi"][0], hsvP["ma"][0])
             for ci in range(1, 3):
                 fcRslt = cv2.add(
                             fcRslt,
-                            cv2.inRange(HSV_img, HSVp["mi"][ci], HSVp["ma"][ci])
+                            cv2.inRange(hsvImg, hsvP["mi"][ci], hsvP["ma"][ci])
                             )
-            ### attempt to remove small erroneous features 
+            ### attempt to remove small erroneous noise 
             kernel = np.ones((3,3),np.uint8)
-            fcRslt = cv2.erode(fcRslt, kernel, iterations=2)
-            fcRslt = cv2.dilate(fcRslt, kernel, iterations=2)
+            fcRslt = cv2.morphologyEx(fcRslt, cv2.MORPH_OPEN, kernel)
             # threshold
             ret, img = cv2.threshold(fcRslt, 50, 255, cv2.THRESH_BINARY)
             return img
         
+        def findAntBlobs(img):
+        # function to find ant blobs & calculating some measures 
+            rslt = {} # result dictionary to return
+            rslt["centroid"] = getCentroid(img) # store centroid of image
+            ccOutput = cv2.connectedComponentsWithStats(img,
+                                                        connectivity=4)
+            nLabels = ccOutput[0] # number of labels (blobs)
+            labeledImg = ccOutput[1]
+            stats = list(ccOutput[2]) # stat [left, top, width, height, area]
+            bRects = [] # blob rects list
+            # list of coordinate of large (> single ant) blob
+            cxL = []; cyL = [] 
+            # list of coordinate of small (<= single ant) blob
+            cxS = []; cyS = [] 
+            for li in range(1, nLabels):
+                s = stats[li]
+                if s[4] < aMinArea: continue
+                # store large blob index
+                bRects.append(list(s[:4]))
+                if s[4] > aMinArea*4:
+                    cxL += [s[0], s[0]+s[2]]
+                    cyL += [s[1], s[1]+s[3]]
+                else:
+                    cxS += [s[0], s[0]+s[2]]
+                    cyS += [s[1], s[1]+s[3]]
+            rslt["bRects"] = bRects # store list of all blobs rect;(x, y, w, h)
+            ### store bounding rect (x,y,w,h) of all blobs
+            r = [min(cxL+cxS), min(cyL+cyS)]
+            r += [max(cxL+cxS)-r[0], max(cyL+cyS)-r[1]]
+            rslt["rect"] = tuple(r) 
+            ### store bounding rect (x,y,w,h) of all large blobs
+            r = [min(cxL), min(cyL)]
+            r += [max(cxL)-r[0], max(cyL)-r[1]]
+            rslt["rectL"] = tuple(r)
+            return rslt 
+        
         p = self.parent
         
         ### determine HSV ranges for detecting ant colors
-        HSVp = dict(mi=[], ma=[]) 
+        hsvP = dict(mi=[], ma=[]) 
         for ci in range(3):
         # 0: ant body color (blackish)
         # 1: color markers other than yellow color 
@@ -204,24 +286,55 @@ class ProcGraphData():
                     obj = wx.FindWindowByName(objName, p.panel["ml"])
                     val.append(obj.GetValue())
                 key = mLbl.lower()[:2]
-                HSVp[key].append(tuple(val)) # store HSV parameter
+                hsvP[key].append(tuple(val)) # store HSV parameter
+        
+        ### get ant minimum area
+        obj = wx.FindWindowByName("aMinArea_txt", p.panel["ml"])
+        aMinAreaTxtVal = obj.GetValue().strip()
+        if aMinAreaTxtVal == "": aMinArea = 100; obj.SetValue("100")
+        else: aMinArea = int(aMinAreaTxtVal)
         
         if p.debugging:
         # debugging
-            for i in range(10):
+            obj = wx.FindWindowByName("debugFrameIntv_txt", p.panel["tp"])
+            intvTxtVal = obj.GetValue().strip()
+            if intvTxtVal == "": intv = 1; obj.SetValue("1")
+            else: intv = int(intvTxtVal)
+            for i in range(intv):
                 p.vRW.getFrame(-1) # get frame image
             fImg = p.vRW.currFrame
+            fImg = preProcImg(fImg, 2, 2)
             img = findAntCols(fImg)
             fImg[img==255] = (50, 50, 255)
-            rsltImg = fImg
-            cv2.putText(rsltImg,
-                        "Frame: %i"%(p.vRW.fi),
-                        (5, rsltImg.shape[0]-20),
-                        cv2.FONT_HERSHEY_PLAIN, 
-                        fontScale=1.2, 
-                        color=(0,0,0),
+            cv2.putText(fImg, "Frame: %i"%(p.vRW.fi), (5, fImg.shape[0]-20),
+                        cv2.FONT_HERSHEY_PLAIN, fontScale=1.2, color=(0,0,0),
                         thickness=1)
-            self.storeGraphImg(rsltImg, p.pi["mp"]["sz"])
+            pt1 = (10, 10)
+            l = int(np.sqrt(aMinArea))
+            pt2 = (pt1[0]+l, pt1[1]+l)
+            # draw ant min. area
+            cv2.rectangle(fImg, pt1, pt2, (30,30,30), -1) 
+            cv2.putText(fImg, "ant min. area", (pt2[0]+10, pt2[1]),
+                        cv2.FONT_HERSHEY_PLAIN, fontScale=1.2, color=(0,0,0),
+                        thickness=1)
+            bInfo = findAntBlobs(img) # get ant blob info
+            ### display blob rects
+            for b in bInfo["bRects"]:
+                pt1 = (b[0], b[1])
+                pt2 = (b[0]+b[2], b[1]+b[3])
+                cv2.rectangle(fImg, pt1, pt2, (0,255,0), 2)
+            ### display entire rect
+            r = bInfo["rect"]
+            cv2.rectangle(fImg, (r[0],r[1]), (r[0]+r[2],r[1]+r[3]), 
+                          (128,128,128), 2)
+            ### display rect, bounding large blobs
+            r = bInfo["rectL"]
+            cv2.rectangle(fImg, (r[0],r[1]), (r[0]+r[2],r[1]+r[3]), 
+                          (0,128,255), 2)
+            # display centroid
+            cv2.circle(fImg, bInfo["centroid"], 10, (200,0,0), -1) 
+            # store the resultant image
+            self.storeGraphImg(fImg, p.pi["mp"]["sz"])
             return
         
         # total number of frames
@@ -246,6 +359,10 @@ class ProcGraphData():
         shape = p.vRW.currFrame.shape
         hmArr = np.zeros((shape[0], shape[1]), 
                          dtype=np.int32) # init array for heatmap 
+        bInfo = [] # Blob (connected component) information.
+            # Each item is a list, representing info in a frame.
+            # Items for a frame are rects (left, top, width, height) of found 
+            #   blobs, which fit into the category of minimum area.
         for fi in range(startFrame, endFrame+1):
         # go through all the frames
             if (fi+1)%10 == 0:
@@ -262,8 +379,10 @@ class ProcGraphData():
             else:
                 p.vRW.getFrame(-1) # get frame image
                 fImg = p.vRW.currFrame
+            fImg = preProcImg(fImg, 2, 2)
             img = findAntCols(fImg)
             hmArr[img==255] += 1 # increase where colors are found
+            bInfo.append(findAntBlobs(img)) # store ant blob info
         
         ### make base image to draw heat-map
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
@@ -360,12 +479,13 @@ class ProcGraphData():
                     thickness=1)
         
         self.storeGraphImg(rsltImg, p.pi["mp"]["sz"])
+        self.storeGraphData([hmArr, bInfo])
         ### store start and end frame
         self.graphImg[-1]["startFrame"] = startFrame
         self.graphImg[-1]["endFrame"] = endFrame
         q2m.put(("finished",), True, None)
    
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def graphJ2020(self, ai, q2m, flag=""):
         """ Draw change of founding queen ants' movements 
@@ -454,7 +574,7 @@ class ProcGraphData():
 
         q2m.put(("finished",), True, None)
     
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def graphV2020(self, dc, flag):
         """ Draw graph for ant-virus study by Cremer and Viljakainen (2020)  
@@ -870,7 +990,7 @@ class ProcGraphData():
             self.vlR = vlR # store rects of virus labels in legend
             self.clR = clR # store rects of classification labels in legend
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
   
     def initUITask(self):
         """ Delete all current UI tasks.
@@ -884,6 +1004,6 @@ class ProcGraphData():
         for key in self.uiTask.keys():
             self.uiTask[key] = None
 
-    #-------------------------------------------------------------------
+    #---------------------------------------------------------------------------
     
-#=======================================================================
+#===============================================================================
