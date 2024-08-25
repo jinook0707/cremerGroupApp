@@ -7,10 +7,10 @@ Open-source software written in Python
 This program was coded and tested in Ubuntu 18.04.
 
 Jinook Oh, Cremer group, Institute of Science and Technology Austria
-Last edited: 2023-08-11
+Last edited: 2024-06-02
 
 Dependency:
-    Python (3.7)
+    Python (3.9)
     wxPython (4.0)
     OpenCV (3.4)
     NumPy (1.18)
@@ -61,6 +61,12 @@ v.0.3.202212:
     Added 'proxMCluster' analysis in AntOS.
 v.0.4.202303:
     Added 'aosSec'; the secondary processing with numpy arrays produced by 'aos'
+v.0.5.202402:
+    Removed J2020fq.
+    Added 'anVid'; drawing graphs with CSV data from AnVid.
+v.0.6.202405:
+    Added 'cremerGroupApp'; drawing visualization of overall functionalities 
+    of all files in CremerGroupApp.
 """
 
 import sys, queue, traceback
@@ -73,20 +79,17 @@ import cv2, wx, wx.adv, wx.stc
 import wx.lib.scrolledpanel as SPanel 
 import numpy as np
 
-_path = path.realpath(__file__)
-FPATH = path.split(_path)[0] # path of where this Python file is
-sys.path.append(FPATH) # add FPATH to path
-P_DIR = path.split(FPATH)[0] # parent directory of the FPATH
-sys.path.append(P_DIR) # add parent directory 
+sys.path.append("..")
+import initVars
+initVars.init(__file__)
+from initVars import *
 
 from modFFC import *
 from modCV import * 
 from procGraph import ProcGraphData 
 
-MyLogger = setMyLogger("visualizer")
-
 FLAGS = dict(debug = False)
-__version__ = "0.4.202303"
+__version__ = "0.6.202405"
 ICON_FP = path.join(P_DIR, "image", "icon.png")
 
 #===============================================================================
@@ -120,7 +123,7 @@ class DataVisualizerFrame(wx.Frame):
               "DataVisualizer v.%s"%(__version__), 
               pos = tuple(wPos),
               size = tuple(wSz),
-              style=wx.DEFAULT_FRAME_STYLE^(wx.RESIZE_BORDER|wx.MAXIMIZE_BOX),
+              style=wx.DEFAULT_FRAME_STYLE^(wx.RESIZE_BORDER|wx.MAXIMIZE_BOX)
               )
         self.SetBackgroundColour('#333333')
         if __name__ == '__main__' and path.isfile(ICON_FP):
@@ -155,7 +158,6 @@ class DataVisualizerFrame(wx.Frame):
         self.mlWid = [] # wx widgets in middle left panel
         self.mrWid = [] # wx widgets in middle right panel
         self.inputFP = ""
-        self.origCSVTxt = "" # origianl CSV text from CSV file 
         self.colTitles = [] # column titles of CSV data
         self.numData = None # numpy array, containing numeric data
         self.strData = None # numpy array, containing string data
@@ -164,16 +166,18 @@ class DataVisualizerFrame(wx.Frame):
         self.pgd = None # instance of ProcGraphData class
         self.debugging = dict(state=False)
         self.eCaseChoices = [
+                "anVid: data from AnVid (analysis of recorded video)",
                 "aos: data from AntOS [Jinook]",
                 "aosSec: secondary data processing with data from 'aos'",
                 #"aosI: intensities from multiple data of aos [Jinook]",
-                #"J2020fq: pilot work with founding queens [Jinook]",
                 "L2020: structured nest [Sartoris et al]",
                 #"L2020CSV1: structured nest (add. info) [Sartoris et al]",
                 #"L2020CSV2: structured nest (add. info) [Sartoris et al]",
                 "V2020: viruses in ant species [Viljakainen et al]",
+                "cremerGroupApp: visualization of cremerGroupApp functionality",
                 ]
         self.inputType = dict(
+                                anVid=("file", "csv"),
                                 aos=("dir", ""),
                                 aosSec=("dir", ""),
                                 #aosI=("dir", ""),
@@ -181,12 +185,13 @@ class DataVisualizerFrame(wx.Frame):
                                 V2020=("file", "csv"),
                                 )
         self.eCase = self.eCaseChoices[0].split(":")[0].strip()
+        self.eCase_noRawData = ["V2020", "L2020", "cremerGroupApp"]
         self.colorPick = "" # temporary string for color picking
         self.percLst = [60, 70, 80, 90, 95, 99, 100] # list of percentile 
         btnImgDir = path.join(P_DIR, "image")
         self.btnImgDir = btnImgDir
         self.targetBtnImgPath = path.join(self.btnImgDir, "target.png")
-        self.targetBtnActImgPath = path.join(self.btnImgDir, "target_a.png")
+        self.targetBtnActImgPath = path.join(self.btnImgDir, "target_a.png") 
         ##### [end] setting up attributes -----
        
         btnSz = (35, 35)
@@ -280,7 +285,45 @@ class DataVisualizerFrame(wx.Frame):
         self.offset_txt = wx.FindWindowByName("offset_txt", self.panel["tp"])
 
         self.config("load") # load configs
-      
+
+        # set up the menu bar
+        self.setUpMenuBar()
+     
+    #---------------------------------------------------------------------------
+
+    def setUpMenuBar(self):
+        """ set up the menu bar
+
+        Args: None
+
+        Returns: None
+        """
+        if FLAGS["debug"]: MyLogger.info(str(locals()))
+
+        menuBar = wx.MenuBar()
+        
+        ### Visualizer menu
+        menu = wx.Menu()
+        openItem = menu.Append(wx.Window.NewControlId(), item="Open\tCTRL+O")
+        self.Bind(wx.EVT_MENU, self.openInputF, openItem)
+        quitItem = menu.Append(wx.Window.NewControlId(), item="Quit\tCTRL+Q")
+        self.Bind(wx.EVT_MENU, self.onClose, quitItem)
+        menuBar.Append(menu, "&Visualizer")
+        
+        ### help menu
+        menuH = wx.Menu()
+        helpStrItem= menuH.Append(wx.Window.NewControlId(), 
+                                  item="Help string\tF1")
+        self.Bind(wx.EVT_MENU,
+                  lambda event: self.onButtonPressDown(event, "help_btn"),
+                  helpStrItem)
+        keymapItem = menuH.Append(wx.Window.NewControlId(), 
+                                  item="Key mapping\tF2")
+        self.Bind(wx.EVT_MENU, self.displayKeyMapping, keymapItem)
+        menuBar.Append(menuH, "&Help")
+
+        self.SetMenuBar(menuBar)
+
     #---------------------------------------------------------------------------
     
     def setPanelInfo(self):
@@ -299,13 +342,13 @@ class DataVisualizerFrame(wx.Frame):
         if sys.platform.startswith("win"):
             #style = (wx.TAB_TRAVERSAL|wx.SIMPLE_BORDER)
             style = (wx.TAB_TRAVERSAL|wx.BORDER_NONE)
-            bgCol = "#777777"
+            bgCol = "#333333"
         else:
             style = (wx.TAB_TRAVERSAL|wx.BORDER_NONE)
             bgCol = "#333333"
 
         # top panel for major buttons
-        pi["tp"] = dict(pos=(0, 0), sz=(wSz[0], 50), bgCol=bgCol, style=style)
+        pi["tp"] = dict(pos=(0, 0), sz=(wSz[0], 60), bgCol=bgCol, style=style)
         tpSz = pi["tp"]["sz"]
         # middle left panel
         pi["ml"] = dict(pos=(0, tpSz[1]), sz=(int(wSz[0]*0.2), wSz[1]-tpSz[1]),
@@ -355,6 +398,8 @@ class DataVisualizerFrame(wx.Frame):
                 pass
         
         ##### [begin] set up middle left panel -----
+        # list of button names to draw ROI or pick position, etc.
+        self.drawBtns = [] 
         w = [] # each item represents a row in the left panel 
         fgC = "#cccccc" 
         bgC = self.pi["ml"]["bgCol"] 
@@ -508,37 +553,39 @@ class DataVisualizerFrame(wx.Frame):
                        "nCol":nCol, "size":hlSz}])
             w.append([{"type":"sTxt", "nCol":nCol, "label":"", "border": 10,
                        "flag":(wx.ALIGN_CENTER_VERTICAL|wx.BOTTOM)}])
-            ### cam index to process
-            w.append([{"type":"sTxt", "label":"cam-index: ", "nCol":1, 
-                       "fgColor":fgC, "bgColor":bgC},
-                      {"type":"cho", "nCol":2, "name":"camIdx",
-                       "choices":["99", "1"], "val":"99"}])
+            if self.eCase == "aos":
+                ### cam index to process
+                w.append([{"type":"sTxt", "label":"cam-index: ", "nCol":1, 
+                           "fgColor":fgC, "bgColor":bgC},
+                          {"type":"cho", "nCol":2, "name":"camIdx",
+                           "choices":["99", "1"], "val":"99"}])
             ### process to run
             ###   Key should NOT include '_' underbar symbol.
             ###     Underbar is used to indicate multiple measures 
             ###     such as 'intensity_reach' (deprecated in 2022-05).
             proc2runCho = ["initImg", "sanityChk"]
             proc2runCho += sorted([
-                        "intensity",
-                        "intensityPSD", # power spectral density
-                        "intensityL", # local intensity (brood, food,...)
-                        "dist2b", # distance to approx. brood position 
-                                  # (max. distance with multiple motion points)
-                        "dist2c", # distance to center of ROI0
-                                  # (max. distance with multiple motion points)
-                        "dist2ca", # distance to center of ROI0
-                                   # (record distances of each motion point,
-                                   #  regardless of data-bundle-interval)
-                        "saMVec", # single ant's movement vector
-                        "spAHeatmap",
-                        "spAGridDenseActivity",
-                        "spAGridHeatMean",
-                        "spAGridHeatMax",
-                        #"spAGridOFlow", # not being used
-                        "motionSpread",
-                        "proxMCluster",
-                        #"distCent", #[deprecated]
-                        ])
+                    "intensity",
+                    "intensityPSD", # power spectral density
+                    "intensityL", # local intensity (brood, food,...)
+                    "dist2b", # distance to approx. brood position 
+                              # (max. distance with multiple motion points)
+                    "dist2c", # distance to center of ROI0
+                              # (max. distance with multiple motion points)
+                    "dist2ca", # distance to center of ROI0
+                               # (record distances of each motion point,
+                               #  regardless of data-bundle-interval)
+                    "saMVec", # single ant's movement vector
+                    "spAHeatmap",
+                    "spAGridDenseActivity",
+                    "spAGridHeatMean",
+                    "spAGridHeatMax",
+                    #"spAGridOFlow", # not being used
+                    "motionSpread",
+                    "proxMCluster",
+                    #"distCent", #[deprecated]
+                    ]) 
+            
             """
             - intensity: number of motions; When raw-data are saved, 
                 5 raw numpy files will be saved. original intensity data, 
@@ -841,6 +888,137 @@ class DataVisualizerFrame(wx.Frame):
             w.append([{"type":"sTxt", "nCol":nCol, "label":"", "border": 10,
                        "flag":(wx.ALIGN_CENTER_VERTICAL|wx.BOTTOM)}])
 
+        elif self.eCase == "anVid":
+            nCol = 3 # max number of coloumns
+            ### draw button
+            w.append([{"type":"btn", "name":"draw", "label":"Draw", 
+                       "nCol":nCol, "size":hlSz}])
+            
+            w.append([{"type":"sTxt", "nCol":nCol, "label":"", "border": 10}])
+            
+            ### process to run
+            proc2runCho = ["initImg"]
+            proc2runCho += [
+                    "intensity",
+                    "intensityT", # intensity around tunnel-area
+                    "intensityP", # intensity around pupae 
+                    "intensityPABR", # intensity with ABR around pupae 
+                    #"presenceT",
+                    "intensityPSD", # power spectral density
+                    "dist2EO", # distance to each other (ant)
+                    #"dist2EOCh",
+                    "distP2T", # distance pupae to tunnel
+                    "distP2A", # distance pupae to ants 
+                    "distA2T", # distance ant to tunnel
+                    "spAHeatmap", # heatmpa with motion data
+                    "spAHeatmapP", # heatmap around pupae
+                    "spAHeatmapABR", # heatmap with ant-blob-rects
+                    "spAHeatmapPABR", # heatmap with ABR around pupae
+                    ]
+            """
+            - intensity: number of motions; When raw-data are saved, 
+                5 raw numpy files will be saved. original intensity data, 
+                smoothed intensity data, summed daily data, motion bout
+                durations (in sec), inactivity durations (in seconds)
+            - intensityT: intensity around the tunnel,
+                the closest accessible position to the stimulus (sham/fungus)
+            - intensityP: intensity-sum around pupae,
+            - presenceT: presence of ants around the tunnel
+            - intensityPSD: Power spectral density of intensity
+                * PSD is calculated with Welch's method (scipy.signal.welch)
+            - dist2EO: sum of distances between two closest blobs. 
+            - dist2EOCh: change of dist2EO from the previous data-bundle
+            - distP2T: Mean distance of pupae to tunnel-center.
+            - distP2A: Mean distance of pupae to the (closest) ant.
+            - distA2T: Mean distance of ants to tunnel-center.
+            - spAHeatmap: (spA; spatial-analysis) heatmap with motion.
+            - spAHeatmapP: heatmap with motion around pupae.
+            - spAHeatmapABR: heatmap with ant-blob-rects (detected by color).
+            - spAHeatmapPABR: heatmap with ant-blob-rects around pupae
+            """
+            w.append([{"type":"sTxt", "label":"process: ", "nCol":1, 
+                       "fgColor":fgC},
+                      {"type":"cho", "nCol":nCol-1, "name":"process",
+                       "choices":proc2runCho, "val":proc2runCho[0]}])
+            ''' ###
+            - interval (sec) to bundle data
+            - default graph size
+            
+            - first hours to ignore
+            - hours to process
+            - y-axis max. value for bar-graph 
+            - y-axis max. value for heatmap
+            - ant body length
+            - tunnel positions
+
+            - power-spectral-density; signal length
+            - power-spectral-density; number of data per segment 
+            
+            - whether to draw smoothed line on bar graph
+            - whether to draw peak points on bar graph
+            - whether to draw outlier data-lines on bar graph
+            '''
+            dPtIntvCho = ["1", "2", "3", "5", "10", "30", "60", "300", 
+                        "600", "1800", "3600", "43200", "86400"]
+            psdLenCho = ["3 h", "6 h", "12 h", "24 h", "72 h", 
+                         "entire input data"]
+            psdNPerSegCho = [str("%i"%(2**x)) for x in range(6,17)]
+            _w = [
+                    ("cho", "dataPtIntv", dPtIntvCho, "bundle interval"),
+                    ("txt", "graphSz", "1500, 500", 
+                        "guiding width & height for bar graphs"), 
+                    #("txt", "fnPrefix", "", "Filename prefix"), 
+                    #("txt", "fnSuffix", "", "Filename suffix"), 
+                    ("txt", "h2ignore", "0", "hours to ignore"), 
+                    ("txt", "h2proc", "0", "hours to process"), 
+                    ("txt", "barGMax", "-1", "y max. for bar graph"), 
+                    ("txt", "heatmapMax", "-1", "y max. for heatmpa"),
+                    ("txt", "antLen", "40", "ant's body length"),
+                    ]
+            
+            ### buttons for tunnel position in two ROIs
+            for bA in ["Before", "After"]: # before/after the trigger stimulus
+                for i in range(2):
+                    _pos = f'{i*200}, 200'
+                    _w.append(("txt4position", f'tunnel{bA}{i}Pt', _pos, 
+                               f'tunnel ROI-{i:02d} ({bA.lower()})'))
+            
+            _w += [
+                    ("sTxt", "", " ", ""), # space
+                    ("cho", "psdLen", psdLenCho, "PSD-length"),
+                    ("cho", "psdNPerSeg", psdNPerSegCho, "PSD-segment"),
+                    ("sTxt", "", " ", ""), # space
+                    ("sTxt", "", "Bar graph details", ""),
+                    ("chk", "smoothLine", True, "Draw smooth line"),
+                    ("chk", "peak", True, "Draw peak points"),
+                    ("chk", "outlier", False, "Mark outlier data-lines"),
+                    ("sTxt", "", " ", ""), # space
+                    ]
+            w = self.makeDictLst4widgets(_w, w, nCol, fgC, bgC)
+
+            ### interval for heatmap
+            _cho = ["-1", "5", "10", "20", "30"]
+            for _intv in range(60, 60*24+1, 60): _cho.append(str(_intv))
+            _cho.append(str(60*24*7))
+            w.append([{"type":"sTxt", "label":"heatmap per", "nCol":1,
+                       "fgColor":fgC},
+                      {"type":"cho", "nCol":1, "name":"heatMapIntv",
+                       "choices":_cho, "val":"-1"},
+                      {"type":"sTxt", "label":"min.", "nCol":1,
+                       "fgColor":fgC}])
+            '''
+            - heatmap point radius
+            - save video of heatmap
+            '''
+            fpsCho = ["1", "10", "30", "60"]
+            _w = [
+                    ("txt", "hmPt", "-1", 
+                        "Radius of each data point in heatmap"), 
+                    ("chk", "saveHMVideo", False, "Save video of heatmap"),
+                    ("cho", "heatMapVideoFPS", fpsCho, "FPS of heatmap video"),
+                    ]
+            w = self.makeDictLst4widgets(_w, w, nCol, fgC, bgC)
+            
         elif self.eCase == "aosI":
             tt = "width & height of graphs for some graphs."
             w.append([{"type":"sTxt", "label":"Graph size", "nCol":1, 
@@ -864,22 +1042,40 @@ class DataVisualizerFrame(wx.Frame):
                        "choices":_cho, "size":(250,-1), "val":_cho[0]}])
 
             _w = [
-                    ("dPtIntvSec", 300), # bundle-interval 
-                    ("h2ignore", 0), # first hours to ignore
-                    ("h2proc", int(24*4)), # hours to process
-                    ("h2ignoreDev", 0), # for deviation from mean graph
-                    ("h2procDev", -1), # for deviation from mean graph
-                    ("nCol", 4), # columns in the resultant graph image 
+                    ("txt", "dPtIntvSec", "300", "bundle-interval"),
+                    ("txt", "h2ignore", "0", "first hours to ignore"),
+                    ("txt", "h2proc", str(int(24*4)), ""),
+                    ("txt", "h2ignoreDev", "0", 
+                        "for deviation from mean graph"),
+                    ("txt", "h2procDev", "-1", "for deviation from mean graph"),
+                    ("txt", "nCol", "4", 
+                        "columns in the resultant graph image"),
+                    ("txt", "xlimDist2c", "-1", 
+                        "max. distance in dist2c/dist2ca"),
+                    ("cho", "decPlDev", ["3", "6"], "decimal places"),
+                    ("txt", "maxYDev", "-1", "Max. Y in deviation graph."),
                     ]
-            for _n, _v in _w:
-                w.append([{"type":"sTxt", "label":_n, "nCol":1, "fgColor":fgC},
-                          {"type":"txt", "nCol":1, "name":_n, "size":(100,-1), 
-                           "val":str(_v), "numOnly":True}])
+            w = self.makeDictLst4widgets(_w, w, nCol, fgC, bgC)
+
+        elif self.eCase == "cremerGroupApp":
+            nCol = 3 # max number of coloumns
+            ### draw button
+            w.append([{"type":"btn", "name":"draw", "label":"Draw", 
+                       "nCol":nCol, "size":hlSz}])
+            
+            w.append([{"type":"sTxt", "nCol":nCol, "label":"", "border": 10}])
+            
+            ### process to run
+            proc2runCho = ["all"]
+            w.append([{"type":"sTxt", "label":"process: ", "nCol":1, 
+                       "fgColor":fgC},
+                      {"type":"cho", "nCol":nCol-1, "name":"process",
+                       "choices":proc2runCho, "val":proc2runCho[0]}]) 
 
         self.mlWid = setupPanel(w, self, pk)
         
-        ##### [end] set up middle left panel -----
-   
+        ##### [end] set up middle left panel ----- 
+
     #---------------------------------------------------------------------------
    
     def initMRWidgets(self):
@@ -897,6 +1093,58 @@ class DataVisualizerFrame(wx.Frame):
                 w.Destroy() # destroy
             except:
                 pass
+
+    #---------------------------------------------------------------------------
+   
+    def makeDictLst4widgets(self, inputLst, w, nCol, fgC, bgC):
+        """ utility function to reduce line of codes to generate wxWidgets.
+        
+        Args:
+            inputLst (list): List of some info to make dicts
+            w (list): List of info to generate widgets
+            nCol (int): Number of columns in a row
+            fgC (str): foreground color
+            bgC (str): background color
+        
+        Returns:
+            w (list): List of info to generate widgets
+        """
+        if FLAGS["debug"]: MyLogger.info(str(locals()))
+
+        for typ, wN, wV, wDesc in inputLst:
+            if typ == "sTxt":
+                w.append([{"type":"sTxt", "label":wV, "nCol":nCol, 
+                           "fgColor":fgC}])
+            
+            elif typ == "txt":
+                w.append([{"type":"sTxt", "label":wN, "nCol":1,
+                           "fgColor":fgC, "tooltip":wDesc},
+                          {"type":"txt", "nCol":nCol-1, "name":wN,
+                           "size":(120,-1), "val":wV, "numOnly":True}])
+            
+            elif typ == "chk":
+                w.append([{"type":"chk", "nCol":nCol, "name":wN,
+                           "label":wDesc, "style":wx.CHK_2STATE,
+                           "val":wV, "fgColor":fgC, "bgColor":bgC}]) 
+            
+            elif typ == "cho":
+                w.append([{"type":"sTxt", "nCol":1, "label":wDesc,
+                           "fgColor":fgC},
+                          {"type":"cho", "nCol":nCol-1, "name":wN,
+                           "choices":wV, "val":wV[0]}])
+
+            elif typ == "txt4position":
+                w.append([{"type":"sTxt", "label":wDesc, "nCol":1, 
+                           "fgColor":fgC},
+                          {"type":"txt", "name":wN, "val":wV, 
+                           "nCol":1, "size":(100,-1)},
+                          {"type":"btn", "name":wN, "nCol":1,
+                           "img":self.targetBtnImgPath,
+                           "bgColor":"#333333", "size":(35,35),
+                           "tooltip":"Choose position by mouse-click"}])
+                self.drawBtns.append(f'{wN}_btn')
+
+        return w
 
     #---------------------------------------------------------------------------
 
@@ -920,6 +1168,7 @@ class DataVisualizerFrame(wx.Frame):
         wxSndPlay(path.join(P_DIR, "sound", "snd_click.wav"))
 
         if objName == "help_btn":
+            if self.eCase not in HELPSTR.keys(): return 
             msg = HELPSTR[self.eCase]
             sz = (int(self.wSz[0]*0.5), int(self.wSz[1]*0.8))
             dlg = PopupDialog(self, -1, "Help string", msg, 
@@ -927,7 +1176,7 @@ class DataVisualizerFrame(wx.Frame):
             dlg.ShowModal()
             dlg.Destroy()
 
-        elif objName == "open_btn": self.openInputFile()
+        elif objName == "open_btn": self.openInputF(None)
 
         elif objName == "save_btn": self.save()
 
@@ -1027,10 +1276,22 @@ class DataVisualizerFrame(wx.Frame):
                 set_img_for_btn(self.targetBtnActImgPath, obj)
 
         elif objName == "draw_btn":
+
+            if self.eCase == "cremerGroupApp":
+                if self.pgd is None: self.pgd = ProcGraphData(self)
+                if not 'ProcCremerGroupApp' in sys.modules:
+                    from procCremerGroupApp import ProcCremerGroupApp
+                self.pgd.subClass = ProcCremerGroupApp(self, self.pgd) 
+                self.flags["blockUI"] = True
+                showStatusBarMsg(self, "Processing data ... ", -1)
+                wx.CallLater(100, self.pgd.subClass.drawGraph)
+                return
+
             if self.pgd is None:
                 msg = "Select the input folder/file first."
                 wx.MessageBox(msg, "Error", wx.OK|wx.ICON_ERROR)
                 return
+
             self.pgd.interactiveDrawing = {} # clear interactive drawing
             if self.eCase == "L2020":
             # Heatmap for Linda (2020)
@@ -1101,7 +1362,7 @@ class DataVisualizerFrame(wx.Frame):
                 """
                 self.pgd.graphL2020CSV2()
 
-            elif self.eCase == "aos":
+            elif self.eCase in ["aos", "anVid"]: 
                 startTaskThread(self, 
                                 "drawGraph", 
                                 self.pgd.subClass.drawGraph,
@@ -1176,22 +1437,28 @@ class DataVisualizerFrame(wx.Frame):
             self.config("load_eCase") # load configs for this eCase
 
         elif objName == "process_cho":
-            if objVal in ["saMVec", "dist2c", "dist2b", "dist2ca"]:
+        # process choice was made 
+
+            # this part is only for AOS for now (2024-03-28)
+            if self.eCase != "aos": return
+
+            w = wx.FindWindowByName("dataPtIntv_cho", self.panel["ml"])
+            if objVal in ["intensity", "proxMCluster"]:
+            # default bundling interval is 300 
+                widgetValue(w, "300", "set")
+            elif objVal in ["saMVec", "dist2c", "dist2b", "dist2ca"]:
             # it's a process to set data-bundle-interval to one
-                w = wx.FindWindowByName("dataPtIntv_cho", self.panel["ml"])
                 widgetValue(w, "1", "set")
-                self.panel["ml"].Refresh()
             else: # otherwise
                 # the data-bundle-interval is better to be higher than one
                 #   (especially for 'intensity', one second bundling creates 
                 #    an artifact of a periodical (20 min. or so) activity 
                 #    pattern, probably due to a slight time lag at each data 
                 #    recording in Raspbbery Pi.)
-                w = wx.FindWindowByName("dataPtIntv_cho", self.panel["ml"])
                 val = widgetValue(w)
                 if val == "1":
                     widgetValue(w, "2", "set")
-                    self.panel["ml"].Refresh()
+            self.panel["ml"].Refresh()
 
     #---------------------------------------------------------------------------
     
@@ -1259,11 +1526,10 @@ class DataVisualizerFrame(wx.Frame):
             allowed = [ord(str(x)) for x in range(10)]
             allowed += [wx.WXK_BACK, wx.WXK_DELETE, wx.WXK_TAB]
             allowed += [wx.WXK_LEFT, wx.WXK_RIGHT]
-            allowed += [ord(".")]
+            allowed += [ord("."), ord("-")]
             if keyCode in allowed:
                 event.Skip()
                 return
-
    
     #---------------------------------------------------------------------------
     
@@ -1322,16 +1588,18 @@ class DataVisualizerFrame(wx.Frame):
     
     #---------------------------------------------------------------------------
 
-    def openInputFile(self):
-        """ Open input file. 
+    def openInputF(self, event):
+        """ Open input file or folder
         
         Args:
-            None
+            event (wx.Event)
         
         Returns:
             None 
         """
         if FLAGS["debug"]: MyLogger.info(str(locals()))
+
+        if self.eCase == "cremerGroupApp": return
 
         fType, ext = self.inputType[self.eCase] # input file/folder type
 
@@ -1363,25 +1631,20 @@ class DataVisualizerFrame(wx.Frame):
         self.zoom_txt.SetValue("1.0")
         self.offset_txt.SetValue("0, 0")
 
-        if fType == "file" and ext == "csv":
-            ### set CSV text
-            f = open(inputFP, 'r')
-            csvTxt = f.read()
-            f.close()
-            self.origCSVTxt = copy(csvTxt) # keep original CSV text 
-
         # delete original graph images saved as temporary files
         if self.pgd != None: self.pgd.removeGraph()
 
         self.pgd = ProcGraphData(self) # init instance class
                                        # for processing graph data 
+        flagInitOnDataLoading = False
+        _args = (self.q2m,)
         try:
             if self.eCase == "L2020": 
                 self.vRW = VideoRW(self) # for reading/writing video file
                 self.vRW.initReader(inputFP) # init video reader
                 ### resize graph panel
                 f = self.vRW.currFrame
-                r = calcI2DIRatio(f, self.pi["mp"]["sz"])
+                r = calcI2DRatio(f, self.pi["mp"]["sz"])
                 sz = (int(f.shape[1]*r), int(f.shape[0]*r))
                 self.panel["mp"].SetSize(sz)
                 self.pi["mp"]["sz"] = sz 
@@ -1409,38 +1672,26 @@ class DataVisualizerFrame(wx.Frame):
                 obj.SetValue(str(self.roi).strip("[]"))
                 # init some variables in ProcGraphData
                 self.pgd.initOnDataLoading()
-            elif self.eCase == "J2020fq":
-                self.pgd.initOnDataLoading()
-                startTaskThread(self, 
-                               "drawGraph", 
-                               self.pgd.graphJ2020fq, 
-                               args=(0, self.q2m,))
-            
+
+            elif self.eCase == "anVid":
+                if not 'ProcAnVidRslt' in sys.modules:
+                    from procAnVid import ProcAnVidRslt
+                self.pgd.subClass = ProcAnVidRslt(self, self.pgd) 
+                flagInitOnDataLoading = True 
+ 
             elif self.eCase == "aos":
                 if not 'ProcAntOS' in sys.modules:
                     from procAntOS import ProcAntOS
                 self.pgd.subClass = ProcAntOS(self, self.pgd) 
-                startTaskThread(self,
-                                "initOnDataLoading", 
-                                self.pgd.subClass.initOnDataLoading,
-                                args=(self.q2m,)) 
+                flagInitOnDataLoading = True  
             
             elif self.eCase == "aosSec":
                 if not 'ProcAntOSSec' in sys.modules:
                     from procAntOSSec import ProcAntOSSec
-                self.pgd.subClass = ProcAntOSSec(self, self.pgd) 
-                '''
-                startTaskThread(self,
-                                "initOnDataLoading", 
-                                self.pgd.subClass.initOnDataLoading,
-                                args=(self.q2m,))
-                '''
+                self.pgd.subClass = ProcAntOSSec(self, self.pgd)  
             
             elif self.eCase == "aosI":
-                startTaskThread(self,
-                                "drawGraph", 
-                                self.pgd.graphAOSI,
-                                args=(self.q2m,)) 
+                startTaskThread(self, "drawGraph", self.pgd.graphAOSI, _args) 
 
             elif self.eCase == "V2020":
                 self.pgd.initOnDataLoading()
@@ -1457,10 +1708,8 @@ class DataVisualizerFrame(wx.Frame):
                     msg += "%s\n"%(csvFP1)
                     wx.MessageBox(msg, "Error", wx.OK|wx.ICON_ERROR)
                     return
-                startTaskThread(self,
-                                "initOnDataLoading", 
-                                self.pgd.initOnDataLoading,
-                                args=(self.q2m,))
+                tF = self.pgd.initOnDataLoading
+                startTaskThread(self, "initOnDataLoading", tF, _args)
 
             elif self.eCase == "L2020CSV2":
                 fn = path.basename(inputFP)
@@ -1475,11 +1724,13 @@ class DataVisualizerFrame(wx.Frame):
                     return
                 self.vRW = VideoRW(self)
                 self.vRW.initReader(videoFP)
-                startTaskThread(self,
-                                "drawGraph", 
-                                self.pgd.graphL2020CSV2,
-                                args=(self.q2m,))
+                tF = self.pgd.graphL2020CSV2
+                startTaskThread(self, "drawGraph", tF, _args)
 
+            if flagInitOnDataLoading: 
+                tF = self.pgd.subClass.initOnDataLoading
+                startTaskThread(self, "initOnDataLoading", tF, (self.q2m,))
+        
         except Exception as e: # failed
             self.inputFP = ""
             self.pgd.csvFP = ""
@@ -1633,7 +1884,7 @@ class DataVisualizerFrame(wx.Frame):
             self.panel[pk].mousePressedPt = mp
 
         else:
-            if self.eCase == "aos":
+            if self.eCase in ["aos", "anVid"]:
                 if len(self.flags["drawingROI"]) > 0: 
                     self.panel[pk].mousePressedPt = mp
                 elif len(self.flags["selectPt"]) > 0:
@@ -1882,9 +2133,34 @@ class DataVisualizerFrame(wx.Frame):
         mState = wx.GetMouseState()
 
         if mState.ControlDown():
-        # CTRL modifier key is pressed
-            if kc == ord("Q"):
+        # CTRL modifier key is pressed  
+            if kc == ord("S"): # save a graph 
+                self.save()
+
+            elif kc == ord("R"): # save a raw data 
+                self.save(savType="raw")
+            
+            elif kc == ord("D"): # delete a graph 
+                if self.pgd != None: self.pgd.removeGraph(self.pgd.graphImgIdx)
+
+            '''
+            elif kc == ord("Q"): # close the app
                 self.onClose(None)
+            
+            elif kc == ord("O"): # open a file/directory
+                self.openInputF(None)
+            '''
+
+        elif mState.ShiftDown():
+        # SHIFT modifier key is pressed
+            if kc == ord("S"): # save all graphs 
+                self.save(isSavingAll=True) 
+
+            elif kc == ord("R"): # save all raw data 
+                self.save(savType="raw", isSavingAll=True)
+
+            elif kc == ord("D"): # delete all graphs
+                if self.pgd != None: self.pgd.removeGraph()
 
         elif mState.AltDown():
         # ALT modifier key is pressed
@@ -1919,10 +2195,12 @@ class DataVisualizerFrame(wx.Frame):
         else: # index is not given, highlight with the current graph-image-index
             thIdx = self.pgd.graphImgIdx
 
+        graphImg = self.pgd.graphImg[thIdx]
+
         ### highlight (drawing yellow border) the given thumbnail image 
         thumbnail = wx.FindWindowByName("thumbnail_%i"%(thIdx), 
                                         self.panel["mr"])
-        bmp = self.pgd.graphImg[thIdx]["thumbnail"].ConvertToBitmap()
+        bmp = graphImg["thumbnail"].ConvertToBitmap()
         dc = wx.MemoryDC(bmp)
         w, h = dc.GetSize()
         dc.SetPen(wx.Pen((255,255,0), 5)) 
@@ -1930,6 +2208,18 @@ class DataVisualizerFrame(wx.Frame):
         dc.DrawRectangle(0, 0, w, h)
         del dc
         thumbnail.SetBitmap(bmp)
+
+        ### update zoom ratio
+        _txt = graphImg["ratDisp2OrigImg"]
+        self.zoom_txt.SetValue(str(_txt))
+        _txt = graphImg["offset"]
+        self.offset_txt.SetValue(str(_txt))
+        
+        ### update image size
+        w = wx.FindWindowByName("imgSavResW_txt", self.panel["bm"])
+        w.SetValue(str(graphImg["imgSz"][0]))
+        w = wx.FindWindowByName("imgSavResH_txt", self.panel["bm"])
+        w.SetValue(str(graphImg["imgSz"][1]))
 
     #---------------------------------------------------------------------------
     
@@ -1994,18 +2284,27 @@ class DataVisualizerFrame(wx.Frame):
         """
         if FLAGS["debug"]: MyLogger.info(str(locals()))
 
-        if flag == "drawGraph":
-            try: additionalImg = rData[4]
+        addData = rData[-1] # additional data
+
+        try: msg = addData["retMsg"]
+        except: msg = "" 
+        if msg != "":
+            if msg.startswith("ERROR"):
+                title = "Error"
+                icon = wx.ICON_ERROR
+            else:
+                title = "Info."
+                icon = wx.ICON_INFORMATION
+            wx.MessageBox(addData["retMsg"], title, wx.OK|icon)
+
+        if flag == "drawGraph": 
+
+            try: additionalImg = addData["additionalImg"] 
             except: additionalImg = None
+
             # store graph image
             self.pgd.storeGraphImg(rData[1], self.pi["mp"]["sz"], additionalImg)
-            gi = self.pgd.graphImgIdx
-
-            ### display the image resolution on UI
-            txt = wx.FindWindowByName("imgSavResW_txt", self.panel["bm"])
-            txt.SetValue(str(rData[1].shape[1]))
-            txt = wx.FindWindowByName("imgSavResH_txt", self.panel["bm"])
-            txt.SetValue(str(rData[1].shape[0]))
+            gi = self.pgd.graphImgIdx 
 
             if len(rData) > 2 and rData[2] != None:
                 # store raw data
@@ -2028,53 +2327,55 @@ class DataVisualizerFrame(wx.Frame):
             elif self.eCase == "L2020CSV2":
                 self.pgd.graphImg[gi]["valueData"] = rData[3]
 
-            elif self.eCase == "J2020fq":
-                showStatusBarMsg(self, "Graph generated.", 3000)
-                ai = len(self.pgd.graphImg)
-                if ai < 4: # there are more ants to process
-                    wx.CallLater(5, startTaskThread, self, "drawGraph", 
-                                 self.pgd.graphJ2020fq, (ai, self.q2m,))
+            elif self.eCase in ["aos", "anVid"]:
+                if self.eCase == "aos":
+                    ### store cam index
+                    cho = wx.FindWindowByName("camIdx_cho", self.panel["ml"])
+                    try: camIdx = int(cho.GetString(cho.GetSelection()))
+                    except: camIdx = 99
+                    self.pgd.graphImg[gi]["camIdx"] = camIdx 
 
-            elif self.eCase == "aos":
-                ### store process name
-                cho = wx.FindWindowByName("process_cho", self.panel["ml"])
-                proc = cho.GetString(cho.GetSelection())
+                ### store process name 
+                w = wx.FindWindowByName("process_cho", self.panel["ml"])
+                proc = w.GetString(w.GetSelection())
                 self.pgd.graphImg[gi]["proc"] = proc
 
-                ### if this process was 'initImg', delete other 'initImg'
-                if proc == "initImg": 
-                    for _gi in list(self.pgd.graphImg.keys()):
-                        if _gi == gi: continue
-                        if self.pgd.graphImg[_gi]["proc"] == "initImg": 
-                            self.pgd.removeGraph(_gi)
+                if self.eCase == "aos":
+                    ### if this process was 'initImg', delete other 'initImg'
+                    if proc == "initImg": 
+                        for _gi in list(self.pgd.graphImg.keys()):
+                            if _gi == gi: continue
+                            if self.pgd.graphImg[_gi]["proc"] == "initImg": 
+                                self.pgd.removeGraph(_gi)
                 self.pgd.graphImgIdx = gi
-
-                ### store cam index
-                cho = wx.FindWindowByName("camIdx_cho", self.panel["ml"])
-                try: camIdx = int(cho.GetString(cho.GetSelection()))
-                except: camIdx = 99
-                self.pgd.graphImg[gi]["camIdx"] = camIdx 
 
                 ### store additional graph info
                 gInfo = rData[3]
                 for key in gInfo.keys():
                     self.pgd.graphImg[gi][key] = gInfo[key] 
 
-                if gInfo["gEIdx"] != -1: # didn't reach the end of data
+                v = self.pgd.subClass.v
+                if gInfo["gEIdx"] == -1 and "fnKIdx" in v.keys():
+                # reached the end of data; there's a 'filename key index'
+                    v["fnKIdx"] += 1 # increase filename key index
+                    if v["fnKIdx"] < len(v["data"]):
+                    # there're more data files to draw
+                        # draw another graph for the next file 
+                        wx.CallLater(5, startTaskThread, self, "drawGraph", 
+                                     self.pgd.subClass.drawGraph,
+                                     args=(self.q2m,))
+                    else:
+                    # reached the end of data files
+                        self.pgd.subClass.v["fnKIdx"] = 0 # init. index
+
+                if gInfo["gEIdx"] != -1:
+                # didn't reach the end of data
                     next_gSIdx = gInfo["gEIdx"] + 1
                     # start another graph generation
                     wx.CallLater(5, startTaskThread, self, "drawGraph", 
                                  self.pgd.subClass.drawGraph,
                                  args=(self.q2m, next_gSIdx,))
                 
-                if proc.startswith("spA") and gInfo["gSIdx"] == 0:
-                    ### set sliderbar max value for spatial-analysis 
-                    sld = wx.FindWindowByName("nav_sld", self.panel["ml"])
-                    sld.SetRange(0, len(gInfo["bDataLst"])-1)
-                    #print(len(gInfo["bDataLst"]), len(gInfo["bD_dt"]))
-                    #print(gInfo["bD_dt"][0], gInfo["bD_dt"][-1])
-                    wx.CallLater(5, self.onSlider, None, "nav_sld")
-
             self.updateMRWid() 
  
         elif flag == "drawGraph4sav":
@@ -2098,8 +2399,33 @@ class DataVisualizerFrame(wx.Frame):
                         obj = wx.FindWindowByName("hmRng-%i-%s_txt"%(i, mLbl), 
                                                   self.panel["ml"])
                         obj.SetValue(str(info["percVal"][mLbl][i]))
-                self.pgd.graphL2020CSV1()
+                self.pgd.graphL2020CSV1() 
 
+            elif self.eCase in ["aos", "anVid"]:
+                rD = rData[1]
+                ### store returned data from init process 
+                for k in rD.keys():
+                    self.pgd.subClass.v[k] = rD[k]
+
+                w = wx.FindWindowByName("process_cho", self.panel["ml"])
+                w.SetSelection(0) # initImg
+                startTaskThread(self, "drawGraph", self.pgd.subClass.drawGraph,
+                                args=(self.q2m,))
+
+                if self.eCase == "anVid":
+                    for fnK in rD["fImg"].keys():
+                        fH, fW = rD["fImg"][fnK].shape[:2]
+                        for i in range(2): # for 2 ROIs
+                            roiK = f'roi{i:02d}'
+                            (x1, y1), (x2, y2) = rD["tunnel"][fnK][roiK]
+                            x = x1 + int((x2-x1)/2)
+                            y = y1 + int((y2-y1)/2)
+                            if "before" in fnK: wn = f'tunnelBefore{i}Pt_txt'
+                            else: wn = f'tunnelAfter{i}Pt_txt'
+                            w = wx.FindWindowByName(wn, self.panel["ml"])
+                            w.SetValue(f'{x}, {y}')
+
+            '''
             elif self.eCase == "aos":
                 ### store returned data from init process 
                 self.pgd.subClass.camIdx = rData[1]["camIdx"]
@@ -2116,6 +2442,9 @@ class DataVisualizerFrame(wx.Frame):
                                 "drawGraph", 
                                 self.pgd.subClass.drawGraph,
                                 args=(self.q2m,))
+            '''
+            
+            showStatusBarMsg(self, "", -1)
         
         elif flag == "readFrames":
             if self.eCase == "L2020":
@@ -2144,10 +2473,11 @@ class DataVisualizerFrame(wx.Frame):
         """
         if FLAGS["debug"]: MyLogger.info(str(locals()))
 
-        if self.inputFP == "": return
+        if self.inputFP == "" or \
+          (savType == "raw" and self.eCase in self.eCase_noRawData):
+            return
 
-        def saveImg(imgFP, fp4sav):
-            # get image to save 
+        def saveImg(imgFP, fp4sav): # get image to save 
             img = cv2.imread(imgFP)
             ### resize if required 
             obj = wx.FindWindowByName("imgSavResW_txt", self.panel["bm"])
@@ -2158,21 +2488,22 @@ class DataVisualizerFrame(wx.Frame):
                 img = cv2.resize(img, (w,h), interpolation=cv2.INTER_CUBIC)
             # save
             cv2.imwrite(fp4sav, img)
-
+       
+        pgd = self.pgd
         msg = ""
-        if isSavingAll: idxRng = self.pgd.graphImgIdxLst 
-        else: idxRng = [self.pgd.graphImgIdx]
+        if isSavingAll: idxRng = pgd.graphImgIdxLst 
+        else: idxRng = [pgd.graphImgIdx]
         msg = "Saved\n"
         for idx in idxRng:
             ### determine file path to write
             # get path & input file (folder) name
-            _path, fn = path.split(self.inputFP) 
+            oPath, fn = path.split(self.inputFP) 
             ext = "." + fn.split(".")[-1]
             if savType == "graph": sExt = ".png"
             elif savType == "raw":
-                if self.eCase == "aos": sExt = ".npy"
-                else: sExt = ".csv"
-            data = self.pgd.graphImg[idx] 
+                if self.eCase == "L2020": sExt = ".csv"
+                else: sExt = ".npy"
+            data = pgd.graphImg[idx] 
             
             ### determine file path to save
             if self.eCase == "L2020":
@@ -2180,6 +2511,7 @@ class DataVisualizerFrame(wx.Frame):
                 newTxt += "_%s%s"%(data["endFrame"], sExt) 
                 newFN = fn.replace(ext, newTxt)
                 fp4sav = self.inputFP.replace(fn, newFN)
+            
             elif self.eCase == "aos":
                 w = wx.FindWindowByName("fnPrefix_txt", self.panel["ml"])
                 prefixTxt = w.GetValue().strip()
@@ -2201,13 +2533,17 @@ class DataVisualizerFrame(wx.Frame):
                 newTxt += sExt # put save file extension
                 if path.isdir(self.inputFP): newFN = fn + newTxt
                 else: newFN = fn.replace(ext, newTxt)
-                fp4sav = path.join(_path, newFN)
+                fp4sav = path.join(oPath, newFN)
+            
+            elif self.eCase == "anVid":
+                fp4sav = pgd.subClass.getSavFilePath(idx, sExt)
+            
             else:
                 if path.isdir(self.inputFP): 
-                    fp4sav = self.inputFP + f"{idx:02d}.png"
+                    fp4sav = self.inputFP + f"{idx:02d}{sExt}"
                 else:
                     ext = "." + fn.split(".")[-1]
-                    fp4sav = self.inputFP.replace(ext, f"{idx:02d}.png")
+                    fp4sav = self.inputFP.replace(ext, f"{idx:02d}{sExt}")
 
             if savType == "graph":
             # save graph image
@@ -2216,13 +2552,21 @@ class DataVisualizerFrame(wx.Frame):
                 msg += fp4sav + "\n\n"
             elif savType == "raw":
             # save raw data
-                if self.eCase in ["L2020", "aos"]:
-                    for fp in glob("tmp_data*%s"%(sExt)):
-                        tmp = fp.replace(sExt, "").split("_")
-                        newFP = fp4sav.replace(sExt, "_%s"%(tmp[3])+sExt)
-                        if tmp[2] == str(idx): # matches graph index
-                            copyfile(fp, newFP)
-                            msg += newFP + "\n\n"
+                for fp in glob("tmp_data*%s"%(sExt)):
+                    tmp = fp.replace(sExt, "").split("_")
+                    if tmp[2] != str(idx): # graph index does not match
+                        continue # ignore this file
+                    newTxt = ""
+                    for i in range(3, len(tmp)): newTxt += f'_{tmp[i]}'
+                    newFP = fp4sav.replace(sExt, f"{newTxt}{sExt}")
+                    ### if ths sub-class has save-file-path function, 
+                    ###   call it to verify
+                    getFP = getattr(pgd.subClass, "getSavFilePath", None)
+                    if callable(getFP):
+                        newFP = getFP(idx, sExt, newFP)
+                    if newFP is not None:
+                        copyfile(fp, newFP)
+                        msg += newFP + "\n\n"
        
         if msg != "": wx.MessageBox(msg, "Info.", wx.OK|wx.ICON_INFORMATION)
    
@@ -2424,6 +2768,35 @@ class DataVisualizerFrame(wx.Frame):
 
     #---------------------------------------------------------------------------
 
+    def displayKeyMapping(self, event):
+        """ Display help string 
+
+        Args:
+            event (wx.Event)
+
+        Returns:
+            None
+        """
+        if FLAGS["debug"]: MyLogger.info(str(locals()))
+
+        title = "Key mapping"
+        msg = ""
+        img = load_img("keyMapping.png")
+        iSz = img.GetSize()
+        sz = (self.wSz[0], self.wSz[1])
+        rat = calcI2DRatio(iSz, sz)
+        iSz = (int(iSz[0]*rat), int(iSz[1]*rat))
+        img = img.Rescale(iSz[0], iSz[1], wx.IMAGE_QUALITY_HIGH)
+        addW = [[{"type":"sBmp", "nCol":2, "bmp":wx.Bitmap(img), 
+                  "border":10, "size":iSz}]]
+        sz = (iSz[0]+20, sz[1])
+        dlg = PopupDialog(self, -1, title, msg, size=sz, 
+                          font=self.fonts[2], flagDefOK=True, addW=addW)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    #---------------------------------------------------------------------------
+
 #===============================================================================
 
 class STC(wx.stc.StyledTextCtrl):
@@ -2511,10 +2884,11 @@ Drawing a graph with the second CSV raw data (mean nearest neighbor distance & a
 
 - 2021.02.
 """
-HELPSTR["J2020fq"] = """
-Graph with movement values of four founding queens in CSV files of four weeks (each CSV file = one day).
+HELPSTR["anVid"] = """
+Graph generated from CSV data of AnVid.
+Currently it processes data from AnVid, which analyzed video recordings of Michaela's experiment (2024.April) on ants' responses to fungal volatiles.
 
-- 2020.09.
+- 2024.02.
 """
 HELPSTR["aos"] = """
 Graph using data from AntOS. 
