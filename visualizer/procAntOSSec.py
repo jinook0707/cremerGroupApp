@@ -7,8 +7,9 @@ Dependency:
     SciPy (1.4)
     OpenCV (3.4)
 
-last edited: 2023-08-05
+last edited: 2024-06-23
 """
+
 from os import path
 from glob import glob
 from copy import copy
@@ -16,6 +17,7 @@ from copy import copy
 from scipy.signal import savgol_filter, find_peaks
 from scipy.stats import iqr 
 
+from initVars import *
 from modFFC import *
 from modCV import *
 from modGraph import *
@@ -115,7 +117,7 @@ class ProcAntOSSec:
         dSrc = {} # data source 
         for di, dS in enumerate(sorted(dateStr)):
             a = fpLst[fpLst[:,2] == dS] # matching date-string
-            if sorted(list(a[:,1])) == nSLst: # n-string should match
+            if sorted(list(a[:,1])) == nSLst: # n-string list should match
                 dSrc[dS] = {}
                 for nS in nSLst:
                     dSrc[dS][nS] = a[a[:,1]==nS][0][0]
@@ -229,14 +231,19 @@ class ProcAntOSSec:
         setPLTParams(nRow=pa["nRow"], nCol=pa["nCol"], spSz=(2.0,1.2))
         if pa["aType"] == "proxMCluster": _shY = False
         else: _shY = True
+        sIntLst = {} # list of intensity sum for each aggregate
         for ns in nSLst:
             fig, ax = plt.subplots(pa["nRow"], pa["nCol"], 
                                    sharey=_shY, sharex=True, tight_layout=True)
             ri = 0
             ci = 0
+            sIntLst[ns] = []
             psdMVLst = []
             for ds in sorted(data.keys()):
                 if ns not in data[ds].keys(): continue
+
+                #mIntLst[ns].append(int(np.round(np.median(data[ds][ns]))))
+                sIntLst[ns].append(int(np.sum(data[ds][ns])))
 
                 params = dict(dPtIntvSec=pa["dPtIntvSec"], maxY=maxY["psd"])
                 ret = drawPSD(data[ds][ns], ax[ri, ci], "", params)
@@ -286,78 +293,120 @@ class ProcAntOSSec:
         ##### [end] comparison of aggreagates -----
 
         ##### [begin] draw deviation graph -----
-        flagDevNorm = True # normalization (division by max value)
+        diffFrom = "median" # mean or median
+        flagNormalize = False # normalize to -1 to 1
+        if pa["aType"] == "proxMCluster": meanPMCLst = {}
         for ns in nSLst:
             fig, ax = plt.subplots(pa["nRow"], pa["nCol"], 
                                    sharey=True, sharex=True, tight_layout=True) 
             ri = 0; ci = 0
             print(f"processing {ns} for deviation graph..")
 
+            if pa["aType"] == "proxMCluster": meanPMCLst[ns] = []
+
             for ds in sorted(dataDev.keys()):
                 if ns not in data[ds].keys(): continue
                 if _debug: print(f"processing {ds}_{ns} ..")
                 
-                d = dataDev[ds][ns]
-                meV = np.mean(d)
-                d = d - meV
-               
-                wlf = 1 #1/1.1 #1/6
-                # determine window length in terms of number of bundled data 
-                # points (default length is one hour)
-                windowLen = int(3600*wlf/pa["dPtIntvSec"]) 
-                hWL = int(windowLen/2)
-                gd = []
-                for i in range(hWL, len(d)-hWL, windowLen):
-                    gd.append(np.sum(d[i-hWL:i+hWL]))
+                _data = dataDev[ds][ns]
+                if diffFrom == "mean": d = _data - np.mean(_data)
+                elif diffFrom == "median": d = _data - np.median(_data)
+             
+                if pa["aType"] == "proxMCluster":
+                    meanPMCLst[ns].append(int(np.round(np.mean(_data))))
+                    wlf = 1 #1/1.1 #1/6
+                    # determine window length in terms of number of bundled 
+                    # data points (default length is one hour)
+                    windowLen = int(3600*wlf/pa["dPtIntvSec"]) 
+                    hWL = int(windowLen/2)
+                    gd = []
+                    for i in range(hWL, len(d)-hWL, windowLen):
+                        gd.append(np.sum(d[i-hWL:i+hWL]))
+                    if flagNormalize:
+                        ### normalize (division by max value)
+                        gd = np.asarray(gd)
+                        gd = gd / np.max(np.abs(gd))
 
-                if flagDevNorm:
-                    ### normalize
-                    gd = np.asarray(gd) 
-                    gd = gd / np.max(np.abs(gd))
-               
+                else:
+                    gd = d
                 # draw bar graph
                 ax[ri,ci].bar(list(range(len(gd))), height=gd) 
 
-                ### draw smooth line
-                wLen = 12 * int(wlf**-1) # window length 
-                gsd = savgol_filter(gd, window_length=wLen, polyorder=3)
-                ax[ri,ci].plot(gsd, c=(1.0,0,0), linewidth=0.75)
+                if pa["aType"] == "proxMCluster":
+                    ### draw smooth line
+                    wLen = 6 * int(wlf**-1) # window length 
+                    #wLen = 6 * int(3600/pa["dPtIntvSec"])
+                    gsd = savgol_filter(gd, window_length=wLen, polyorder=3)
+                    ax[ri,ci].plot(gsd, c=(1.0,0.5,0), linewidth=0.75)
+                   
+                    if flagNormalize:
+                        ax[ri,ci].set_ylim(-1.0, 1.0)
+                    else:
+                        ax[ri,ci].set_ylim(-1*1e6, 4*1e6)
 
-                ### write the first time when it goes below average (0)
-                for i, gsdV in enumerate(gsd):
-                    if gsdV < 0: break
-                if wlf == 1.0: txt = "%i h"%(i+1)
-                else: txt = "%.3f h"%((i+1) * wlf)
-                ax[ri,ci].text(i, max(gd), txt, fontsize=12,
-                           horizontalalignment="left", verticalalignment="top")
+                    '''
+                    ### write the first time when it goes below average (0)
+                    for i, gsdV in enumerate(gsd):
+                        if gsdV < 0: break
+                    if wlf == 1.0: txt = "%i h"%(i+1)
+                    else: txt = "%.3f h"%((i+1) * wlf)
+                    ax[ri,ci].text(i, max(gd), txt, fontsize=12,
+                                   horizontalalignment="left", 
+                                   verticalalignment="top")
+                    '''
+                else:  
+                    ### draw regression line
+                    regX = np.asarray(range(len(gd)))
+                    slope, intcpt = np.polyfit(regX, gd, 1)
+                    ax[ri,ci].plot(regX, slope*regX+intcpt, 
+                                   c=(1.0,0,0), linewidth=0.75)
 
-                if flagDevNorm:
-                    ax[ri,ci].set_ylim(-1.0, 1.0)
-                else:
-                    # set y-tick format for this subplot
-                    setYFormat(max(gd), ax[ri,ci])
+                    w = wx.FindWindowByName("maxYDev_txt", main.panel["ml"])
+                    maxY = widgetValue(w).strip()
+                    if maxY in ["", "-1"]: maxY = max(gd)
+                    else: maxY = int(maxY)
+                    ax[ri,ci].set_ylim(-maxY, maxY)
+
+                    # write the slope of the regression line
+                    w = wx.FindWindowByName("decPlDev_cho", main.panel["ml"])
+                    decPlaces = int(widgetValue(w))
+                    txt = f'{slope:.{decPlaces}f}'
+                    if maxY == -1: y = 0
+                    else: y = maxY
+                    ax[ri,ci].text(len(gd), maxY, txt, fontsize=12,
+                                   horizontalalignment="right", 
+                                   verticalalignment="bottom")
+ 
+                    setYFormat(maxY, ax[ri,ci])
                
                 ci += 1
                 if ci >= pa["nCol"]:
                     ci = 0 
                     ri += 1 
-         
-            supTitle = f"Diff. from mean [{pa['aType']}]; {ns}"
+
+            supTitle = f"Diff. from {diffFrom} [{pa['aType']}]; {ns}"
             fig.suptitle(supTitle)
             graph = convt_mplFig2npArr(fig)
-            if flagSavImgs: 
-                fn = f"vRslt_diffFMean_{pa['aType']}_{ns}.png"
+            if flagSavImgs:
+                fn = "vRslt_diffF"
+                fn += f"{diffFrom.capitalize()}_{pa['aType']}_{ns}.png"
                 rsltMsg += f"{fn}\n"
                 fp = path.join(outputFolder, fn)
                 cv2.imwrite(fp, graph)
             # display the result graph
             main.callback(("finished", graph), flag="drawGraph")
-        ##### [end] draw deviation graph -----
+        ##### [end] draw deviation graph ----- 
 
         plt.close("all")
         if flagSavImgs:
             rsltMsg += f"----------\n\nsaved in\n{main.inputFP}."
             wx.MessageBox(rsltMsg, "Info.", wx.OK|wx.ICON_INFORMATION)
+
+        for ns in sIntLst.keys():
+            print(f'[{ns}] sum of intensity: {str(sIntLst[ns])}')
+        if pa["aType"] == "proxMCluster":
+            for ns in meanPMCLst.keys():
+                print(f'[{ns}] mean PMC: {str(meanPMCLst[ns])}')
 
     #---------------------------------------------------------------------------
 
@@ -523,6 +572,9 @@ class ProcAntOSSec:
         
         fLst = sorted(glob(path.join(main.inputFP, "*.npy")))
 
+        distMF = 100 # multiply this to the distance value (make it to %)
+        thr2walk = 120 # threshold (%) for walking 
+
         # get items from filename matching with the given parameters
         dateStr, fpLst = self.n1610_getFNItems(fLst, pa) 
         if _debug:
@@ -544,7 +596,8 @@ class ProcAntOSSec:
         data = dict(direction=[], dist=[]) # read data
         data4prob = {} # data for probability distributions 
         for dk in data.keys(): data4prob[dk] = []
-            
+           
+        wdStat = dict(me=[], md=[], mx=[]) 
         for fp, ns, ds in fpLst:
             msg = f'Processing {path.basename(fp)} ..'
             arr = np.load(fp)
@@ -558,10 +611,12 @@ class ProcAntOSSec:
             _dt = arr["datetime"]
 
             iDT = None
+            tmpData4WDStat = [] # tmp. list for calc. walking-distance stat.
             for ri in range(1, _dt.shape[0]):
             # go through each data index
 
-                if _d["direction"][ri] == -1: continue # no movement occurred
+                #if _d["direction"][ri] == -1: continue # no movement occurred
+                if _d["dist"][ri] == 0: continue # no motion occurred
 
                 if iDT is None:
                     iDT = get_datetime(_dt[ri])
@@ -574,6 +629,8 @@ class ProcAntOSSec:
                     if pa["h2proc"] <= 0: # no hour limit
                         for dk in data.keys():
                             data[dk][-1].append(_d[dk][ri]) # store data
+                            if dk == "dist" and _d[dk][ri] >= thr2walk/distMF:
+                                tmpData4WDStat.append(_d[dk][ri])
                     else: # there's a hour limit for data 
                         if len(data[dk][-1]) >= dL2get:
                         # data length reached the limit 
@@ -581,12 +638,22 @@ class ProcAntOSSec:
                         else:
                             for dk in data.keys():
                                 data[dk][-1].append(_d[dk][ri]) # store data
-           
+                                if dk == "dist":
+                                    if _d[dk][ri] >= thr2walk/distMF:
+                                        tmpData4WDStat.append(_d[dk][ri])
+        
+            ### store some stats of walking distance
+            wdStat["me"].append(np.mean(tmpData4WDStat))
+            wdStat["md"].append(np.median(tmpData4WDStat))
+            wdStat["mx"].append(np.max(tmpData4WDStat))
+            
             # update max. value of 'dist'
             _max = max(data["dist"][-1])
-            if _max > pa["maxVal"]["dist"]: pa["maxVal"]["dist"] = _max 
-          
-        distMF = 100 # multiply this to the distance value (make it to %)
+            if _max > pa["maxVal"]["dist"]: pa["maxVal"]["dist"] = _max
+
+        # print walking-distance stats
+        for k, v in wdStat.items(): print(k, v)
+
         for dk in data.keys():
             _max = pa["maxVal"][dk]
             if dk == "dist": _max = int(_max * distMF)
@@ -602,13 +669,24 @@ class ProcAntOSSec:
                     # count how many of this value occurred
                     cnt = np.count_nonzero(_data==val)
                     data4prob[dk][i].append(cnt)
-
             print(msg)
         ##### [end] get data -----
 
         ##### [begin] draw prob. dist. graph & save the prob. as npy -----
         for dk in data.keys():
             dArr = np.asarray(data4prob[dk])
+            
+            if dk == "dist":
+                ### print the percentage of non-walking motions
+                ###   & delete the data
+                summed = np.sum(dArr, 1)
+                prob = dArr / summed[:,None]
+                msg = f'\n* Percent of motions below {thr2walk} % -----\n'
+                for ri in range(prob.shape[0]):
+                    msg += f'{np.sum(prob[ri,:thr2walk])*100}\n'
+                    dArr[ri,:thr2walk] = 0 # delete non-walking motion
+                print(msg)
+
             summed = np.sum(dArr, 1) # sum each row (of each data file)
             prob = dArr / summed[:,None] # divide each row with summed values 
                                          #   to get occurrence probability
@@ -616,7 +694,10 @@ class ProcAntOSSec:
             elif dk == "dist": gKey = "dsp"
             ### display probability graphs of each file
             for ri in range(prob.shape[0]):
-                g = drawProbDistributions({f'{gKey}':prob[ri]})
+                kwa = {f'{gKey}':prob[ri]}
+                if dk == "direction": kwa[f'{gKey}YLim'] = 0.01
+                elif dk == "dist": kwa[f'{gKey}YLim'] = 0.035
+                g = drawProbDistributions(kwa)
                 cvFont = cv2.FONT_HERSHEY_PLAIN
                 fThck = 1 
                 _thP = int(g[gKey].shape[0] * 0.025)
@@ -641,7 +722,10 @@ class ProcAntOSSec:
             fp = path.join(outputFolder, f'prob_{dk}.npy')
             np.save(fp, np.asarray(prob))
             ### draw average (of all recorded individuals) probability
-            rGraph = drawProbDistributions({f'{gKey}':np.mean(prob, 0)})
+            kwa = {f'{gKey}':np.mean(prob, 0)}
+            if dk == "direction": kwa[f'{gKey}YLim'] = 0.01
+            elif dk == "dist": kwa[f'{gKey}YLim'] = 0.035
+            rGraph = drawProbDistributions(kwa)
             if flagSavImgs:
                 fn = f'vRslt_{gKey}.png'
                 fp = path.join(outputFolder, fn)
@@ -673,7 +757,7 @@ class ProcAntOSSec:
         pa["aType"] = f'dist2{flag}'
         pa["dPtIntvSec"] = 1 # 1-second-bundled-data only
         pa["maxVal"] = 0
-        
+
         fLst = sorted(glob(path.join(main.inputFP, "*.npy")))
 
         # get items from filename matching with the given parameters
@@ -734,10 +818,13 @@ class ProcAntOSSec:
                             else:
                                 for dk in data.keys():
                                     data[dk][-1].append(cVal) # store data
-           
-            # update max. value 
-            _max = max(data[pa["aType"]][-1])
-            if _max > pa["maxVal"]: pa["maxVal"] = _max 
+          
+            if pa["xlimDist2c"] == -1:
+                # update max. value 
+                _max = max(data[pa["aType"]][-1])
+                if _max > pa["maxVal"]: pa["maxVal"] = _max 
+
+        if pa["xlimDist2c"] != -1: pa["maxVal"] = pa["xlimDist2c"] 
           
         for dk in data.keys():
             _max = pa["maxVal"]
@@ -780,7 +867,7 @@ class ProcAntOSSec:
                 peakInfo = sorted(peakInfo)[-1] # get only the highest peak 
                 vl = [(peakInfo[1], (0,1,0))] # peak index & color
 
-                ### find range of 50% of data around the found peak
+                ### find range of 70% of data around the found peak
                 idx = vl[0][0]
                 rng = [idx, idx+1]
                 pSum = cData[idx] 
@@ -789,15 +876,15 @@ class ProcAntOSSec:
                     rng[1] = min(rng[1]+1, len(cData)-1)
                     pSum += cData[rng[0]]
                     pSum += cData[rng[1]]
-                vl.append((rng[0], (0,0.5,0)))
-                vl.append((rng[1], (0,0.5,0)))
+                #vl.append((rng[0], (0,0.5,0)))
+                #vl.append((rng[1], (0,0.5,0)))
                 # store the range
                 rng70Lst.append(rng[1]-rng[0])
 
                 # draw prob. distribution graph
                 g = drawProbDistributions({
                                             f'{gKey}': cData,
-                                            f'{gKey}YLim': 0.035,
+                                            f'{gKey}YLim': 0.03,
                                             f'vline': vl,
                                             f'xtraD': (sd, (1,0.5,0)),
                                             })
@@ -814,7 +901,7 @@ class ProcAntOSSec:
             ### draw average (of all recorded individuals) probability
             rGraph = drawProbDistributions({
                                             f'{gKey}': np.mean(prob, 0),
-                                            f'{gKey}YLim': 0.025 
+                                            f'{gKey}YLim': 0.03 
                                             })
             # display the result graph
             main.callback(("finished", rGraph[gKey]), flag="drawGraph")
@@ -873,8 +960,8 @@ class ProcAntOSSec:
             if len(_fn) < 5: continue
             nS, dS, anS1, intvS, anS2 = _fn[:5]
             n = int(nS.lstrip("n"))
-            _intv = int(intvS.lstrip("intv"))
-            
+            intv = int(intvS.lstrip("intv"))
+
             if pa["aType"] == "actInact":
                 if anS1 != "intensity": continue
                 if anS2.lower() not in ["intensitymboutsec",
@@ -884,7 +971,7 @@ class ProcAntOSSec:
                 if pa["aType"] != anS1: continue
                 if pa["aType"] == "proxMCluster" and nS == "n1": continue
                 if pa["aType"] == "saMVec" and nS != "n1": continue
-            if pa["dPtIntvSec"] != _intv: continue
+            if pa["dPtIntvSec"] != intv: continue
             
             fpLst.append([fp, f'n{n:02d}', dS])
             if dS not in dateStr: dateStr.append(dS)

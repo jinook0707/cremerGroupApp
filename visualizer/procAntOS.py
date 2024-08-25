@@ -10,7 +10,7 @@ Dependency:
 
     #PYOD (0.9)
 
-last edited: 2023-07-18
+last edited: 2024-04-10
 """
 
 import sys, csv, ctypes
@@ -30,10 +30,9 @@ from scipy import stats
 #from pyod.models.mad import MAD # Median Absolute Deviation
 from tsmoothie.smoother import LowessSmoother
 
+from initVars import *
 from modFFC import *
 from modCV import *
-
-MyLogger = setMyLogger("visualizer")
 
 DEBUG = False
 
@@ -59,13 +58,8 @@ class ProcAntOS:
         self.mainFrame = mainFrame # main object with wx.Frame
         self.parent = parent
 
-        self.camIdx = None 
-        self.camIdx4i = None 
-        self.imgFiles = None 
-        self.data = None 
-        self.ci = None 
-        self.keys = None 
-        self.temperature = None 
+        self.v = dict(camIdx = None, camIdx4i = None, imgFiles = None,
+                      data = None, ci = None, keys = None, temperature = None)
         ##### [end] setting up attributes on init. -----
 
     #---------------------------------------------------------------------------
@@ -86,7 +80,7 @@ class ProcAntOS:
         # camera index for certain region of interest
         camIdx4i = dict(
                             roi0=99 # ROI-0 was recorded by cam-index 99
-                        ) 
+                        )
         
         # gather paths of all files under the input folder, 
         # including sub-folders.
@@ -234,12 +228,12 @@ class ProcAntOS:
 
         main = self.mainFrame # wx.Frame in visualizer.py
         prnt = self.parent # graph processing module (procGraph.py)
-        data = self.data # list of lines in CSV result file
-        ci = self.ci # column index of CSV data
+        data = self.v["data"] # list of lines in CSV result file
+        ci = self.v["ci"] # column index of CSV data
         cho = wx.FindWindowByName("camIdx_cho", main.panel["ml"])
         try: camIdx = int(cho.GetString(cho.GetSelection())) # camera index 
-        except: camIdx = self.camIdx4i["roi0"]
-        imgFileLst = self.imgFiles[camIdx] # image file list
+        except: camIdx = self.v["camIdx4i"]["roi0"]
+        imgFileLst = self.v["imgFiles"][camIdx] # image file list
         cho = wx.FindWindowByName("process_cho", main.panel["ml"])
         proc2run = cho.GetString(cho.GetSelection()) # process to run 
         tempMeasureIntv = 600 # temperature measure interval in seconds
@@ -264,7 +258,7 @@ class ProcAntOS:
         roi = dict(roi0=[-1, -1, -1, -1])
         roiCt = {}
         for k in roi.keys():
-            if camIdx == self.camIdx4i[k]:
+            if camIdx == self.v["camIdx4i"][k]:
                 txt = wx.FindWindowByName("%sROI_txt"%(k), main.panel["ml"])
                 r = txt.GetValue() 
                 try: r = [int(_x) for _x in r.split(",")]
@@ -324,24 +318,24 @@ class ProcAntOS:
                 locDist[k] = np.min(dists) * locThr[k]
         if "_" in proc2run:
         # "_" in process name indicates multiple measurements 
-            bDataLst = {}
-            for k in proc2run.split("_"): bDataLst[k] = []
+            bData = {}
+            for k in proc2run.split("_"): bData[k] = []
         elif proc2run == "intensityL":
         # multiple measures based on location
-            bDataLst = {}
-            for k in loc: bDataLst[k] = []
+            bData = {}
+            for k in loc: bData[k] = []
         elif proc2run == "saMVec":
         # single-ant's movement vector (direction, distance & position)
-            bDataLst = dict(direction=[], dist=[], posX=[], posY=[])
+            bData = dict(direction=[], dist=[], posX=[], posY=[])
         elif proc2run.startswith("spAGrid"):
         # activity measures of each cell in a grid 
-            bDataLst = {}
+            bData = {}
             for r in range(spAGrid["rows"]):
                 for c in range(spAGrid["cols"]):
                     k = "[%i][%i]"%(r, c)
-                    bDataLst[k] = []
+                    bData[k] = []
         else:
-            bDataLst = [] # list of bundled data
+            bData = [] # list of bundled data
         bD_dt = [] # datetime for the bundled data
         hmArr = None # array for heatmap (or other spatial-analysis)
         ### make the list of process which measures multiple items 
@@ -522,17 +516,17 @@ class ProcAntOS:
                 fImg = cv2.imread(imgFileLst[0])
                 hmArr = np.zeros(fImg.shape[:2], dtype=np.int16)
             ### bundle data with interval
-            args = (camIdx, roi, proc2run, data, ci, bDataLst, bD_dt, gSIdx, \
+            args = (camIdx, roi, proc2run, data, ci, bData, bD_dt, gSIdx, \
                     flagZeroPadding, dPtIntvSec, dPtIntv, hmIntvMin, hmIntv, \
                     tBin, ptoi, roiCt, locDist, hmArr, spAGrid, q2m)
             ret = self.bundleData(args) 
-            bDataLst, bD_dt, gSDT, gEIdx, gEDT, zPadIdx, days, hmArr = ret
+            bData, bD_dt, gSDT, gEIdx, gEDT, zPadIdx, days, hmArr = ret
         ##### [end] data-processing (bundling) for actual measurements ----- 
 
         ##### [begin] drawing graph ----- 
         if proc2run in ["intensity", "intensityL", "motionSpread", 
                         "proxMCluster", "dist2b", "dist2c", "dist2ca"]:
-            args = (proc2run, bDataLst, dPtIntvSec, graphW, graphH, gBg, \
+            args = (proc2run, bData, dPtIntvSec, graphW, graphH, gBg, \
                     cvFont, bD_dt, tempMeasureIntv, main, flagZeroPadding, \
                     q2m, days, gSDT, gEDT, zPadIdx)
             img, nDCols, rawData = self.drawBarGraph(args)
@@ -541,45 +535,43 @@ class ProcAntOS:
         # Applying Welch's method for estimating power spectral density 
         #   - smoothing over non-systematic noise
         #   - being robust to some non-stationarities
-            args = (proc2run, main, bDataLst, dPtIntvSec, graphW, graphH, \
+            args = (proc2run, main, bData, dPtIntvSec, graphW, graphH, \
                     gBg, cvFont, bD_dt, fsPeriod)
             img, fsPeriod, mg = self.drawPSD(args)
             rawData = [None]
         
         elif proc2run == "spAHeatmap":
-            args = (hmArr, main, prnt, bDataLst, bD_dt, cvFont, hmRad, camIdx, \
+            args = (hmArr, main, prnt, bData, bD_dt, cvFont, hmRad, camIdx, \
                     gSDT, gEDT, q2m, fImg)
             img, rawData = self.drawHeatmap(args)
 
         elif proc2run.startswith("spAGrid"):
-            args = (proc2run, bDataLst, dPtIntvSec, graphH, gBg, \
+            args = (proc2run, bData, dPtIntvSec, graphH, gBg, \
                     cvFont, bD_dt, main, spAGrid, q2m)
             img, cpdImg, rawData = self.drawGridMeasure(args)
 
         elif proc2run == "saMVec":
             img = cv2.imread(imgFileLst[0])
             img = self.makeBaseImg(img) 
-            args = (proc2run, bDataLst, bD_dt, img, q2m)
+            args = (proc2run, bData, bD_dt, img, q2m)
             img, rawData = self.drawMVec(args)
         ##### [end] drawing graph -----
             
         q2m.put(("displayMsg", "storing image and data..",), True, None)
        
         ### store additional info, different depending which type of graph
-        gInfo = dict(bDataLst=bDataLst, bD_dt=bD_dt, gSIdx=gSIdx, gEIdx=gEIdx,
+        gInfo = dict(bData=bData, bD_dt=bD_dt, gSIdx=gSIdx, gEIdx=gEIdx,
                      timeLbl=timeLbl, days=days, mg=mg, dPtIntvSec=dPtIntvSec)
         if proc2run in ["intensity", "intensityL", "motionSpread", 
                         "proxMCluster", "dist2b", "dist2c", "dist2ca"]:
             gInfo["nDataInRow"] = nDCols # number of data columns 
                                          #   in a row of daily data
-            gInfo["initImgHeight"] = img.shape[0]
 
         elif proc2run.startswith("spAGrid"):
             gInfo["spAGrid"] = spAGrid
             additionalImg = cpdImg
 
         elif "PSD" in proc2run:
-            gInfo["initImgWidth"] = img.shape[1]
             gInfo["fsPeriod"] = fsPeriod
        
         ### send the results
@@ -588,7 +580,7 @@ class ProcAntOS:
 
     #---------------------------------------------------------------------------
 
-    def fillEmptyData(self, proc2run, bDataLst, bD_dt, dt):
+    def fillEmptyData(self, proc2run, bData, bD_dt, dt):
         if proc2run == "spAHeatmap":
         # heatmap; has list of motion-points in each bundle
             fillItem = []
@@ -602,13 +594,13 @@ class ProcAntOS:
             fillItem = 0
         if proc2run in self.multipleMeasures:
         # multiple measurements
-            for k in bDataLst.keys():
-                if type(fillItem) == dict: bDataLst[k].append(fillItem[k])
-                else: bDataLst[k].append(fillItem)
+            for k in bData.keys():
+                if type(fillItem) == dict: bData[k].append(fillItem[k])
+                else: bData[k].append(fillItem)
         else:
-            bDataLst.append(fillItem)
+            bData.append(fillItem)
         bD_dt.append(dt)
-        return bDataLst, bD_dt
+        return bData, bD_dt
 
     #---------------------------------------------------------------------------
 
@@ -623,7 +615,7 @@ class ProcAntOS:
         """ 
         if DEBUG: MyLogger.info(str(locals()))
 
-        camIdx, roi, proc2run, data, ci, bDataLst, bD_dt, gSIdx, \
+        camIdx, roi, proc2run, data, ci, bData, bD_dt, gSIdx, \
           flagZeroPadding, dPtIntvSec, dPtIntv, hmIntvMin, hmIntv, tBin, \
           ptoi, roiCt, locDist, hmArr, spAGrid, q2m = args
 
@@ -635,6 +627,7 @@ class ProcAntOS:
             h2p[k] = int(widgetValue(w))
        
         days = [] # days in this graph
+        is1stData = True
         gSDT = None # starting datetime of this graph
         gEIdx = -1 # data index where this graph ends
         gEDT = None # end datetime of this graph
@@ -666,7 +659,7 @@ class ProcAntOS:
                     gEDT = dt
                     break
 
-            if gSDT is None: 
+            if is1stData: 
             # the 1st data to process
                 gSDT = dt # store the datetime of start of the graph
                 sDI = copy(di) # store starting index of this data bundle 
@@ -678,12 +671,12 @@ class ProcAntOS:
                 if flagZeroPadding:
                     ### fill the missing data in the starting date 
                     while _dayB+dPtIntv < dt:
-                        bDataLst, bD_dt = self.fillEmptyData(
-                                            proc2run, bDataLst, bD_dt, _dayB
+                        bData, bD_dt = self.fillEmptyData(
+                                            proc2run, bData, bD_dt, _dayB
                                             )
                         _dayB = _dayB + dPtIntv
                     # store where zero padding ended at the beginning 
-                    zPadIdx[0] = len(bDataLst) 
+                    zPadIdx[0] = len(bData) 
                     sDT = _dayB # store starting datetime of this data bundle
                 else:
                     sDT = copy(gSDT)
@@ -694,38 +687,38 @@ class ProcAntOS:
                 if nIntv > 1:
                     ### fill zero data when time passed over one interval
                     for __ in range(nIntv-1):
-                        bDataLst, bD_dt = self.fillEmptyData(
-                                            proc2run, bDataLst, bD_dt, sDT
+                        bData, bD_dt = self.fillEmptyData(
+                                            proc2run, bData, bD_dt, sDT
                                             )
                         sDT = sDT + dPtIntv
                 
                 ##### [begin] store data & TS of this bundled data ---
                 if proc2run in ["intensity", "intensityPSD"]:
                     _inten = sum(tBin["intensity"]) 
-                    bDataLst.append(_inten)
+                    bData.append(_inten)
 
                 elif proc2run == "motionSpread":
-                    bDataLst.append(sum(tBin["spreadValue"]))
+                    bData.append(sum(tBin["spreadValue"]))
 
                 elif proc2run == "proxMCluster":
-                    bDataLst.append(sum(tBin["interactingMCluster"]))
+                    bData.append(sum(tBin["interactingMCluster"]))
 
                 elif proc2run == "intensityL":
                     mx = np.asarray(tBin["mx"])
                     my = np.asarray(tBin["my"])
                     for k in ptoi.keys():
                         if -1 in ptoi[k]:
-                            bDataLst[k].append(0) 
+                            bData[k].append(0) 
                         else:
                             dist_m = np.sqrt((mx-ptoi[k][0])**2 + 
                                              (my-ptoi[k][1])**2)
                             ptW = (locDist[k] - dist_m) / locDist[k]
                             ptW[ptW<0] = 0
-                            bDataLst[k].append(np.sum(ptW))
+                            bData[k].append(np.sum(ptW))
 
                 elif proc2run.startswith("dist2"):
                     if tBin["mx"] == []:
-                        bDataLst.append(-1)
+                        bData.append(-1)
                     else:
                         if proc2run == "dist2b":
                             _pt = ptoi["brood"]
@@ -735,7 +728,7 @@ class ProcAntOS:
                         cx = np.mean(tBin["mx"])
                         cy = np.mean(tBin["my"])
                         dist = np.sqrt((_pt[0]-cx)**2 + (_pt[1]-cy)**2)
-                        bDataLst.append(int(round(dist)))
+                        bData.append(int(round(dist)))
                         '''
                         if proc2run in ["dist2b", "dist2c"]:
                             dists = []
@@ -744,7 +737,7 @@ class ProcAntOS:
                                 dists.append(
                                         np.sqrt((_pt[0]-x)**2 + (_pt[1]-y)**2)
                                         )
-                            bDataLst.append(int(max(dists)))
+                            bData.append(int(max(dists)))
                         elif proc2run == "dist2ca":
                             ### store data with all the motion points,
                             ### regardless of data-bundle-interval.
@@ -752,7 +745,7 @@ class ProcAntOS:
                                 y = tBin["my"][mpti]
                                 dist = np.sqrt((_pt[0]-x)**2 + (_pt[1]-y)**2)
                                 # store data
-                                bDataLst.append(int(dist))
+                                bData.append(int(dist))
                                 # [*] store timestamp for this data
                                 bD_dt.append(sDT)
                             bD_dt.pop(-1) # [*] remove the last timestamp, 
@@ -776,9 +769,16 @@ class ProcAntOS:
                             # furthest distance from the previous position
                             fDist = np.max(dists)
                             if fDist < self.antLen*1.2:
-                            # didn't move long enough
-                                flagNonMov = True 
+                            # didn't move far enough (could be self-grooming)
+                                # store direction
+                                bData["direction"].append(-1)
+                                # store distance
+                                bData["dist"].append(fDist/self.antLen)
+                                ### store the current position
+                                bData["posX"].append(-1)
+                                bData["posY"].append(-1)
                             else:
+                            # moving/walking
                                 fIdx = np.where(dists==fDist)[0][0]
                                 # the furthest point from the previous position
                                 x = xs[fIdx]; y = ys[fIdx]
@@ -799,19 +799,19 @@ class ProcAntOS:
                                 cv2.imwrite(fn, _img)
                                 ''' 
                                 # store direction
-                                bDataLst["direction"].append(deg)
+                                bData["direction"].append(deg)
                                 # store distance
-                                bDataLst["dist"].append(fDist/self.antLen)
+                                bData["dist"].append(fDist/self.antLen)
                                 ### store the current position
-                                bDataLst["posX"].append(x)
-                                bDataLst["posY"].append(y)
+                                bData["posX"].append(x)
+                                bData["posY"].append(y)
                                 # update the prev. position in temp. bin
                                 tBin["prevPos"] = (x, y)
                     if flagNonMov:
-                        bDataLst["direction"].append(-1)
-                        bDataLst["dist"].append(0)
-                        bDataLst["posX"].append(-1)
-                        bDataLst["posY"].append(-1)
+                        bData["direction"].append(-1)
+                        bData["dist"].append(0)
+                        bData["posX"].append(-1)
+                        bData["posY"].append(-1)
 
                 if proc2run == "spAHeatmap":
                     if len(tBin["m_pts"]) > 0:
@@ -819,7 +819,7 @@ class ProcAntOS:
                         for pt in tBin["m_pts"]:
                             hmArr[pt[1],pt[0]] += 1
                     # append all motion points
-                    bDataLst.append(tBin["m_pts"])
+                    bData.append(tBin["m_pts"])
                         
                 elif proc2run.startswith("spAGrid"):
                     ##### [begin] spatial-analysis with grid on nest -----
@@ -920,7 +920,7 @@ class ProcAntOS:
                                     frac = wc / cellArea 
                                     ### store the fraction 
                                     k = "[%i][%i]"%(r, c)
-                                    bDataLst[k].append(frac)
+                                    bData[k].append(frac)
 
                         elif proc2run.startswith("spAGridHeat"):
                         # spatial-analysis; heatmap in each cell of grid
@@ -939,7 +939,7 @@ class ProcAntOS:
                                     elif proc2run == "spAGridHeatMax":
                                         mv = np.max(hmArr[_y1:_y2,_x1:_x2])
                                     if np.isnan(mv): mv = 0
-                                    bDataLst[k].append(mv)
+                                    bData[k].append(mv)
                             if flagImgSav4Debug:
                                 img = hmArr.astype(np.float16)
                                 img = (img/np.max(img)*255).astype(np.uint8)
@@ -1024,14 +1024,14 @@ class ProcAntOS:
                                         if mv == 0: mv += 1 
                                     else:
                                         mv = 0
-                                    bDataLst[k].append(mv)
+                                    bData[k].append(mv)
                    
                     else: # no motion is recorded in this bundle
-                        for k in bDataLst.keys():
+                        for k in bData.keys():
                             if proc2run == "spAGridOFlow":
-                                bDataLst[k].append(0)
+                                bData[k].append(0)
                             else:
-                                bDataLst[k].append(0.0)
+                                bData[k].append(0.0)
                     ##### [end] spatial-analysis with grid on nest ----- 
 
                 ### store timestamp for this data 
@@ -1074,7 +1074,7 @@ class ProcAntOS:
                 for _pt in m_pts_str:
                     pt = [int(_x) for _x in _pt.split("/")]
                     for rk in roi.keys():
-                        if not camIdx == self.camIdx4i[rk]: continue
+                        if not camIdx == self.v["camIdx4i"][rk]: continue
                         _r = roi[rk]
                         if _r[0] <= pt[0] <= _r[0]+_r[2] and \
                           _r[1] <= pt[1] <= _r[1]+_r[3]:
@@ -1213,7 +1213,7 @@ class ProcAntOS:
                     ##### [end] process data-line for motionSpread -----
 
                 if proc2run == "proxMCluster":
-                    if di == gSIdx:
+                    if is1stData: 
                     # the 1st data to process
                         ### init 
                         # save images for debugging purpose
@@ -1291,19 +1291,21 @@ class ProcAntOS:
                         gEIdx = sDI-1 # store the end index
                         gEDT = sDT # store the end datetime of this graph 
                         break
+
+            is1stData = False
       
         if flagZeroPadding:
             ### fill data until end of the end date 
-            zPadIdx[1] = len(bDataLst) # store index where zero padding 
+            zPadIdx[1] = len(bData) # store index where zero padding 
                                        # ended at the end 
             _dateEnd = datetime(year=dt.year, month=dt.month, day=dt.day)
-            _dateEnd = _dateEnd + timedelta(days=1) - timedelta(seconds=1)
+            _dateEnd = _dateEnd + timedelta(days=1, seconds=dPtIntvSec)
             while dt < _dateEnd:                   
                 dt += timedelta(seconds=dPtIntvSec)
-                bDataLst, bD_dt = self.fillEmptyData(
-                                        proc2run, bDataLst, bD_dt, dt
+                bData, bD_dt = self.fillEmptyData(
+                                        proc2run, bData, bD_dt, dt
                                         ) 
-        return (bDataLst, bD_dt, gSDT, gEIdx, gEDT, zPadIdx, days, hmArr)
+        return (bData, bD_dt, gSDT, gEIdx, gEDT, zPadIdx, days, hmArr)
 
     #---------------------------------------------------------------------------
 
@@ -1318,7 +1320,7 @@ class ProcAntOS:
         """ 
         if DEBUG: MyLogger.info(str(locals()))
 
-        proc2run, bDataLst, dPtIntvSec, graphW, graphH, gBg, cvFont, \
+        proc2run, bData, dPtIntvSec, graphW, graphH, gBg, cvFont, \
           bD_dt, tempMeasureIntv, main, flagZeroPadding, q2m, days, \
           gSDT, gEDT, zPadIdx = args 
 
@@ -1327,17 +1329,17 @@ class ProcAntOS:
         origDLst = {} 
         dLst = {} # temporary data to draw graph  
         if proc2run in self.multipleMeasures: # multiple measurements
-            for k in bDataLst.keys():
-                if sum(bDataLst[k]) > 0:
+            for k in bData.keys():
+                if sum(bData[k]) > 0:
                     if proc2run == "intensityL":
-                        origDLst[k] = bDataLst[k]
+                        origDLst[k] = bData[k]
                         ### normalize measure to 0.0-1.0
-                        d = np.asarray(bDataLst[k])
+                        d = np.asarray(bData[k])
                         dLst[k] = list(d/np.max(d))
                     else:
-                        dLst[k] = bDataLst[k]
+                        dLst[k] = bData[k]
         else:
-            dLst[proc2run] = bDataLst
+            dLst[proc2run] = bData
         
         ### prepare graph image array & smoothed data 
         sdLst = {}
@@ -1368,14 +1370,16 @@ class ProcAntOS:
                     _maxVal = max(sdLst[k])
                 if maxVal < _maxVal: maxVal = copy(_maxVal)
         else:
-            _cols = len(bDataLst) 
+            _cols = len(bData) 
             # get smoothed data
             sdLst[proc2run] = savgol_filter(dLst[proc2run], 
                                             window_length=sWinLen, 
                                             polyorder=sPolyOrder)
-            maxVal = max(bDataLst)
+            maxVal = max(bData)
+        
         _rows = copy(graphH) 
-        yMul = _rows / maxVal 
+        if maxVal == 0: yMul = 1 
+        else: yMul = _rows / maxVal 
         _img = np.zeros((_rows, _cols*p2col, 3), dtype=np.uint8)
         cv2.rectangle(_img, (0,0), (_img.shape[1], _img.shape[0]), 
                       gBg, -1) # bg-color 
@@ -1409,13 +1413,13 @@ class ProcAntOS:
         ### mark temperature
         tempLbl = ""
         """
-        t = self.temperature["t"]
+        t = self.v["temperature"]["t"]
         tLen = len(t)
-        tdt = self.temperature["dt"]
-        tlv = self.temperature["mi"]
-        tRng = self.temperature["ma"] - tlv
+        tdt = self.v["temperature"]["dt"]
+        tlv = self.v["temperature"]["mi"]
+        tRng = self.v["temperature"]["ma"] - tlv
         tempLbl = "Temp.: min. %.1f C"%(tlv)
-        tempLbl += ", max. %.1f C"%(self.temperature["ma"])
+        tempLbl += ", max. %.1f C"%(self.v["temperature"]["ma"])
         if not proc2run in self.multipleMeasures: # not multiple measurements
             ### draw temperature line
             ti = 0 # index for temperature data
@@ -1708,8 +1712,8 @@ class ProcAntOS:
                       (bD_dt[x2-1]-gEDT) >= timedelta(hours=1):
                         flagDiscard = True
                     if not flagDiscard:
-                        t = self.temperature["t"]
-                        tdt = self.temperature["dt"]
+                        t = self.v["temperature"]["t"]
+                        tdt = self.v["temperature"]["dt"]
                         tmpTemp = []
                         for ti in range(tempIdx, len(t)):
                             _tdt = datetime(year=tdt[ti].year,
@@ -1753,11 +1757,11 @@ class ProcAntOS:
 
         ### prepare intensity and its smoothed data
         maxVal = []
-        if type(bDataLst) == list:
+        if type(bData) == list:
             ks = [proc2run]
-            maxVal.append(np.max(bDataLst))
-            dLen = len(bDataLst)
-        elif type(bDataLst) == dict: # might have multiple data lists
+            maxVal.append(np.max(bData))
+            dLen = len(bData)
+        elif type(bData) == dict: # might have multiple data lists
         # In this case, dictionary-key will be the data column
             for k in dLst.keys(): maxVal.append(np.max(dLst[mk]))
             dLen = len(dLst[k])
@@ -1831,7 +1835,7 @@ class ProcAntOS:
         """ 
         if DEBUG: MyLogger.info(str(locals()))
 
-        proc2run, main, bDataLst, dPtIntvSec, graphW, graphH, gBg, cvFont, \
+        proc2run, main, bData, dPtIntvSec, graphW, graphH, gBg, cvFont, \
           bD_dt, fsPeriod = args
 
         key = proc2run.rstrip("PSD")
@@ -1844,7 +1848,7 @@ class ProcAntOS:
 
         ### get beginning & end data index for each bundle (such as 1 day)
         if psdLen == "entire input data":
-            psdDI = [[0, len(bDataLst)-1]]
+            psdDI = [[0, len(bData)-1]]
         else:
             psdDI = [[0, -1]]
             if psdLen.endswith(" d"):
@@ -1882,7 +1886,7 @@ class ProcAntOS:
         # go through each PSD
             ### get data for PSD
             idx0, idx1 = psdDI[psdi]
-            psdData = np.asarray(bDataLst[idx0:idx1+1])
+            psdData = np.asarray(bData[idx0:idx1+1])
             if len(psdData) < psdNPerSeg: continue
             psdData -= round(np.mean(psdData))
             _txt = "begin:%s, end:%s"%(bD_dt[idx0], bD_dt[idx1])
@@ -2030,7 +2034,7 @@ class ProcAntOS:
         """ 
         if DEBUG: MyLogger.info(str(locals()))
 
-        hmArr, main, prnt, bDataLst, bD_dt, cvFont, hmRad, camIdx, \
+        hmArr, main, prnt, bData, bD_dt, cvFont, hmRad, camIdx, \
           gSDT, gEDT, q2m, fImg = args
 
         rows, cols = hmArr.shape[:2]
@@ -2094,7 +2098,7 @@ class ProcAntOS:
             q2m.put(("displayMsg", "making heatmap video..",), True, None)
             # make heatmap video file
             self.makeHeatmapVideo((main.inputFP, 
-                            copy(self.imgFiles[camIdx]), bDataLst, bD_dt,
+                            copy(self.v["imgFiles"][camIdx]), bData, bD_dt,
                             cvFont, fThck, fScale, txtW, txtH, txtBl))
 
         rawData = dict(heatMapArr=hmArr)
@@ -2114,12 +2118,12 @@ class ProcAntOS:
         """ 
         if DEBUG: MyLogger.info(str(locals()))
 
-        proc2run, bDataLst, dPtIntvSec, graphH, gBg, cvFont, \
+        proc2run, bData, dPtIntvSec, graphH, gBg, cvFont, \
           bD_dt, main, spAGrid, q2m = args
         flagDrawPeaks = False 
 
         origDLst = {}
-        dLst = bDataLst
+        dLst = bData
 
         ### get max. value in each cell
         maxValLst = []
@@ -2133,8 +2137,8 @@ class ProcAntOS:
                 mvInGrid = 360
             ### normalize each cell data to 0.0-1.0
             for k in dLst.keys():
-                origDLst[k] = bDataLst[k] # store the original data
-                d = np.asarray(bDataLst[k])
+                origDLst[k] = bData[k] # store the original data
+                d = np.asarray(bData[k])
                 dLst[k] = list(d/mvInGrid)
        
         '''
@@ -2357,7 +2361,7 @@ class ProcAntOS:
 
         flag = "gradual" # gradual/ flash/ ani
 
-        inputFP, tmpILst, bDataLst, bD_dt, \
+        inputFP, tmpILst, bData, bD_dt, \
           cvFont, fThck, fScale, txtW, txtH, txtBl = args
 
         fn = "heatmap_%s.avi"%(get_time_stamp())
@@ -2373,7 +2377,7 @@ class ProcAntOS:
         '''
         ### cut a part of data to make the video
         _i0 = 25000; _i1 = 25300
-        bDataLst = bDataLst[_i0:_i1] 
+        bData = bData[_i0:_i1] 
         bD_dt = bD_dt[_i0:_i1] 
         '''
         
@@ -2405,9 +2409,9 @@ class ProcAntOS:
         #ssROI = [550, 0, 900, 1440]
         if flag in ["gradual", "ani"] and mPtRad > 0:
             tmpGrey = np.zeros(tuple(fSh[:2]), dtype=np.uint8)
-        for i, _bD in enumerate(bDataLst):
+        for i, _bD in enumerate(bData):
             if flag != "ani" and i%10 == 0:
-                msg = "writing video %i/ %i"%(i+1, len(bDataLst))
+                msg = "writing video %i/ %i"%(i+1, len(bData))
                 print("\r", msg, end="          ", flush=True)
 
             ### get snapshot image
@@ -2461,7 +2465,7 @@ class ProcAntOS:
                     _dists = []
                     for _pBDi, (px, py) in enumerate(_pBD):
                         msg = "writing video"
-                        msg += " [%i/%i]"%(i+1, len(bDataLst))
+                        msg += " [%i/%i]"%(i+1, len(bData))
                         msg += " [%i/%i]"%(_bDi+1, len(_bD))
                         msg += " [%i/%i]"%(_pBDi+1, len(_pBD))
                         print("\r", msg, end="          ", flush=True)
@@ -2515,7 +2519,7 @@ class ProcAntOS:
         """ 
         if DEBUG: MyLogger.info(str(locals()))
             
-        proc2run, bDataLst, bD_dt, img, q2m = args
+        proc2run, bData, bD_dt, img, q2m = args
 
         main = self.mainFrame 
 
@@ -2544,15 +2548,15 @@ class ProcAntOS:
                         e=(10,10,255), # emphasizing color 
                         )
         _ppos = None # previous position
-        dLen = len(bDataLst["direction"])
+        dLen = len(bData["direction"])
         for di in range(dLen):
             if di % 100 == 0:
                 msg = f'drawing data... {di}/ {dLen}'
                 q2m.put(("displayMsg", msg,), True, None)
-            _dir = bDataLst["direction"][di]
+            _dir = bData["direction"][di]
             if _dir == -1: continue
-            _dist = bDataLst["dist"][di]
-            _pos = (bDataLst["posX"][di], bDataLst["posY"][di])
+            _dist = bData["dist"][di]
+            _pos = (bData["posX"][di], bData["posY"][di])
             if _ppos is not None and _ppos != (-1, -1):
                 tmpImg[:,:,:] = 0
                 ### determine color
@@ -2579,20 +2583,20 @@ class ProcAntOS:
 
         ### get max values of each data column 
         maxVal = []
-        for k in bDataLst.keys():
-            maxVal.append(np.max(bDataLst[k]))
+        for k in bData.keys():
+            maxVal.append(np.max(bData[k]))
         ### set data type depending on the max value of each list
         bdType = []
         for mv in maxVal:
             bdType.append(getNumpyDataType(mv, flagIntSign=True)) 
         _dtype = [("datetime", "U26")]
-        for mi, mk in enumerate(bDataLst.keys()):
+        for mi, mk in enumerate(bData.keys()):
             _dtype.append((mk, bdType[mi]))
         rD = np.zeros(dLen, dtype=_dtype) # initiate array
         #rD["datetime"] = np.array([str(x) for x in bD_dt])
         rD["datetime"] = bD_dt 
-        for mi, mk in enumerate(bDataLst.keys()):
-            rD[mk] = np.array(bDataLst[mk], dtype=bdType[mi])
+        for mi, mk in enumerate(bData.keys()):
+            rD[mk] = np.array(bData[mk], dtype=bdType[mi])
         rawData = dict(i=rD)
 
         return img, rawData

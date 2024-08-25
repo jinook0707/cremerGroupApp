@@ -8,7 +8,7 @@ Dependency:
     SciPy (1.4)
     OpenCV (3.4)
 
-last edited: 2023-03-27
+last edited: 2024-06-02
 """
 
 import sys, csv, ctypes
@@ -23,6 +23,7 @@ import numpy as np
 from scipy.signal import find_peaks, savgol_filter, welch, periodogram
 from scipy.spatial.distance import cdist
 
+from initVars import *
 from modFFC import *
 from modCV import *
 
@@ -57,6 +58,8 @@ class ProcGraphData:
         self.fonts = parent.fonts
         self.interactiveDrawing = {} # for drawing data via user interaction 
         self.subClass = None
+        # cases to show some info on certain graphs
+        self.c2showInfoOnMouseMove = ["L2020CSV2", "aos", "anVid"]
         ##### [end] setting up attributes on init. -----
    
     #---------------------------------------------------------------------------
@@ -120,45 +123,6 @@ class ProcGraphData:
             ##### [end] calculate additional info to display ----- 
             q2m.put(("finished", hmArr, info,), True, None)
 
-        elif p.eCase == "J2020fq":
-            tmp = glob(path.join(p.inputFP, "*.csv")) # all file list
-            fLst = dict(day=[], night=[])
-            for i, fp in enumerate(tmp):
-                fn = path.basename(fp)
-                if int(fn.split("_")[5]) < 12: fLst["day"].append(fp)
-                else: fLst["night"].append(fp)
-             
-            data = {} # data of each founding queen ants to show on graph
-            data["day"] = {}
-            data["night"] = {}
-            for k in data.keys(): # day & night
-                for fp in fLst[k]: # each file in the dat/night file list
-                    fileH = open(fp, "r")
-                    lines = fileH.readlines()
-                    fileH.close()
-                    fn = path.basename(fp)
-                    tmp = fn.split("_") 
-                    mmdd = tmp[3] + tmp[4] # month & date timestamp
-                    data[k][mmdd] = dict(a00=[], a01=[], a02=[], a03=[])
-                    for line in lines:
-                        if line.startswith("frame-index,"): continue
-                        items = line.split(",")
-                        if len(items) < 13: continue
-                        for ai in range(4):
-                            ak = "a%02i"%(ai) # ant key
-                            # movement value
-                            val = items[(ai+1)*3].strip().replace("\n","")
-                            if val == "None": val = -1
-                            else: val = int(val)
-                            data[k][mmdd][ak].append(val)
-                        if len(data[k][mmdd][ak]) == 1100: break
-            self.data = data
-            ### color set-up
-            self.color = dict(a00 = dict(day=(0,0,255), night=(0,0,128)),
-                              a01 = dict(day=(0,255,0), night=(0,128,0)),
-                              a02 = dict(day=(255,0,0), night=(128,0,0)),
-                              a03 = dict(day=(255,0,255), night=(128,0,128)))
-
         elif p.eCase == "V2020": 
             ##### [begin] set colors
             # set colors (BGR) for each species
@@ -208,7 +172,10 @@ class ProcGraphData:
             # column indices of string data
             self.stringDataIdx = [0, 1] 
             ### get CSV data as array
-            ret = csv2numpyArr(p.origCSVTxt, ",", 
+            f = open(p.inputFP, 'r')
+            csvTxt = f.read()
+            f.close()
+            ret = csv2numpyArr(csvTxt, ",", 
                                self.numericDataIdx, self.stringDataIdx, 
                                np.int8)
             self.colTitles, self.numData, self.strData = ret
@@ -257,12 +224,16 @@ class ProcGraphData:
         if not additionalImg is None:
             fn = "tmp_origImg%i_a.png"%(gi)
             cv2.imwrite(fn, additionalImg) # write original additional image 
-        self.graphImg[gi] = {} 
+        self.graphImg[gi] = {}
+
+        # store image size (width, height)
+        self.graphImg[gi]["imgSz"] = (img.shape[1], img.shape[0])
         
         ### resize (when ratio is not 1.0) & store the image
         print("[ProcGraphData.storeGraphImg] storing image..")
+        iSz = (img.shape[1], img.shape[0])
         # set ratio of displayed image to original image
-        self.graphImg[gi]["ratDisp2OrigImg"] = calcI2DIRatio(img, sz)
+        self.graphImg[gi]["ratDisp2OrigImg"] = calcI2DRatio(iSz, sz)
         # init offset value
         self.graphImg[gi]["offset"] = [0, 0]
         p.zoom_txt.SetValue(str(self.graphImg[gi]["ratDisp2OrigImg"]))
@@ -292,31 +263,30 @@ class ProcGraphData:
         p = self.parent
         eCase = p.eCase
         gi = max(self.graphImgIdxLst) # the latest graph index
-        for di in range(len(data)):
+        firstKeyType = "data" 
+        dLen = len(data)
+        if type(data) == dict:
+            kLst = list(data.keys())
+            if kLst[0].startswith("roi"):
+                firstKeyType = "roi" 
+                dLen = len(data[kLst[0]])
+
+        def savNPArr(eCase, fn, d):
+            header = ""
+            for descr in d.dtype.descr: header += descr[0] + ", "
+            header = header.rstrip(", ")
+            if eCase in ["aos", "anVid"]:
+            # cases for saving numpy array as it is
+                fn = fn.replace(".csv", ".npy")
+                np.save(fn, d, allow_pickle=False)
+            else:
+                np.savetxt(fn, d, newline="\n", delimiter=",", header=header)
+
+        for di in range(dLen):
             if type(data) == list:
                 d = data[di]
                 fn = "tmp_data_%i_%i.csv"%(gi, di)
-            elif type(data) == dict:
-                key = list(sorted(data.keys()))[di]
-                d = data[key]
-                fn = "tmp_data_%i_%s.csv"%(gi, key)
-            if type(d) == np.ndarray:
-                header = ""
-                for descr in d.dtype.descr: header += descr[0] + ", "
-                header = header.rstrip(", ")
-                if eCase == "aos":
-                    fn = fn.replace(".csv", ".npy")
-                    np.save(fn, d, allow_pickle=False)
-                    """
-                        _fmt = "%s"
-                        for __ in range(1, len(d[0])): _fmt += ", %i" 
-                        np.savetxt(fn, d, fmt=_fmt, delimiter=",",
-                                   newline="\n", header=header)
-                    """
-                else:
-                    np.savetxt(fn, d, newline="\n", delimiter=",", 
-                               header=header)
-            elif type(d) == list:
+
                 if eCase == "L2020":
                     colTitles = sorted(d[0].keys())
                     colTitles.remove("bRects")
@@ -339,6 +309,23 @@ class ProcGraphData:
                         line = line.rstrip(", ") + "\n"
                         fh.write(line)
                     fh.close()
+            
+            elif type(data) == dict:
+                if firstKeyType == "roi":
+                    for roiK in data.keys():
+                        _data = data[roiK]
+                        key = list(sorted(_data.keys()))[di]
+                        d = _data[key]
+                        fn = f'tmp_data_{gi}'
+                        # skip the basic data (intensity) indicator, 'i' 
+                        if key == "i": fn += f'_{roiK}.csv'
+                        else: fn += f'_{key}_{roiK}.csv'
+                        savNPArr(eCase, fn, d)
+                else:
+                    key = list(sorted(data.keys()))[di]
+                    d = data[key]
+                    fn = f'tmp_data_{gi}_{key}.csv'
+                    savNPArr(eCase, fn, d)
  
     #---------------------------------------------------------------------------
   
@@ -647,7 +634,7 @@ class ProcGraphData:
             col = tuple([200 for _x in range(fImg.shape[2])])
             fImg = maskImg(fImg, [p.roi], col)
             # pre-process
-            fImg = preProcImg(fImg, 2, 2) 
+            fImg = makeImgDull(fImg, 2, 2) 
             if flagMaskWalls:
                 fImg = maskWalls(fImg) # mask two walls
             # greyscale image
@@ -753,7 +740,7 @@ class ProcGraphData:
             col = tuple([200 for _x in range(fImg.shape[2])])
             fImg = maskImg(fImg, [p.roi], col)
             # pre-process
-            fImg = preProcImg(fImg, 2, 2)
+            fImg = makeImgDull(fImg, 2, 2)
             if flagMaskWalls:
                 fImg = maskWalls(fImg) # mask two walls
             # greyscale image
@@ -1015,19 +1002,22 @@ class ProcGraphData:
                     hmCols[key] = (255, 255, 255)
 
         maxV = np.max(hmArr)
+        cvFont = cv2.FONT_HERSHEY_PLAIN
+        ### get font 
+        fThck = 1 
+        thP = max(int(min(rsltImg.shape[:2])*0.03), 12)
+        fScale, txtW, txtH, txtBl = getFontScale(
+                        cvFont, thresholdPixels=thP, thick=fThck
+                        )
         # set color square length in legend
-        colSqLen = int(min(rsltImg.shape[0], rsltImg.shape[1]) * 0.02)
-        # font scale
-        fScale = min(rsltImg.shape[0], rsltImg.shape[1]) / (25 / 0.02)
-        legY = colSqLen 
+        colSqLen = txtH + txtBl 
+        legY = colSqLen + 5 
         fCol = getConspicuousCol(hmBgCol)
         fCol = (fCol[2], fCol[1], fCol[0]) # font color
         # write title label
-        cv2.putText(rsltImg, titleLbl, (10, legY), cv2.FONT_HERSHEY_PLAIN, 
+        cv2.putText(rsltImg, titleLbl, (10, legY), cvFont, 
                     fontScale=fScale, color=fCol, thickness=1)
         for i, key in enumerate(hmLvlRngs.keys()):
-            msg = "drawing heatmap range %i/%i"%(i+1, len(hmLvlRngs))
-            print("\r", msg, end=" "*30)
             ### get indices of pixels for heatmap
             rng1, rng2 = hmLvlRngs[key]
             idx = np.logical_and(np.greater_equal(hmArr, rng1),
@@ -1215,94 +1205,6 @@ class ProcGraphData:
         except:
             graphW = 1500
             graphH = 500
-
-
-    #---------------------------------------------------------------------------
-  
-    def graphJ2020fq(self, ai, q2m):
-        """ Draw change of founding queen ants' movements 
-        
-        Args:
-            ai (int): Ant index.
-            q2m (queue.Queue): Queue to send data to main thread.
-         
-        Returns:
-            None
-        """ 
-        if DEBUG: MyLogger.info(str(locals()))
-        
-        p = self.parent
-        data = self.data
-        ak = "a%02i"%(ai) # ant key
-
-        ### create array
-        rows = [] 
-        cols = 0
-        for ti, tk in enumerate(data.keys()): # day & night
-            _cols = 0
-            _rows = 0
-            for dk in sorted(data[tk].keys()): # each date
-                _cols += len(data[tk][dk][ak])
-                maxVal = max(data[tk][dk][ak])
-                if maxVal > _rows: _rows = copy(maxVal)
-            rows.append(_rows)
-            if _cols > cols: cols = copy(_cols)
-        msg = "[%s] creating array of size (%i, %i) ..."%(ak, sum(rows), cols)
-        q2m.put(("displayMsg", msg,), True, None)
-        # init array for graph
-        rsltImg = np.zeros((sum(rows), cols, 3), dtype=np.uint8)
-        rsltImg[:rows[0],:] = [255,255,255] # bg-color for day
-        rsltImg[rows[0]:,:] = [200,200,200] # bg-color for night
-        
-        dLineThick = int(rsltImg.shape[1] * 0.001)
-        ptRad = int(rsltImg.shape[0] * 0.005)
-        ptThick = int(rsltImg.shape[0] * 0.0025)
-        x = 0
-        dKeys = list(sorted(data["day"].keys()))
-        for dk in sorted(data["night"].keys()):
-            if not dk in dKeys: dKeys.append(dk)
-        for dk in dKeys: # each date
-            msg = "[%s] processing date - %s.%s ..."%(ak, dk[:2], dk[2:])
-            q2m.put(("displayMsg", msg,), True, None)
-            xs = [x, x]
-            for ti, tk in enumerate(data.keys()): # day & night
-                if not dk in data[tk].keys(): continue
-                endY = sum(rows[:ti+1])
-                color = self.color[ak][tk]
-                for i in range(1, len(data[tk][dk][ak])):
-                    val = data[tk][dk][ak][i]
-                    pVal = data[tk][dk][ak][i-1] # data of previous frame
-                    if -1 in [val, pVal]: continue
-                    y1 = endY - pVal
-                    y2 = endY - val
-                    pt1 = (xs[ti]-1, y1)
-                    pt2 = (xs[ti], y2)
-                    cv2.line(rsltImg, pt1, pt2, color, 1)
-                    xs[ti] += 1
-                ### display average and median value as empty & filled dot
-                medVal = int(np.median(data[tk][dk][ak]))
-                avgVal = int(np.average(data[tk][dk][ak]))
-                midX = int(x + (xs[ti]-x)/2)
-                cv2.circle(rsltImg, (midX, endY-avgVal), ptRad, color, ptThick) 
-                cv2.circle(rsltImg, (midX, endY-medVal), ptRad, color, -1) 
-                ### write average mov value 
-                textY = 500 * (int(dk[2:])%2+1)
-                if ti == 1: textY += rows[0]
-                cv2.putText(rsltImg,
-                            str(avgVal), 
-                            (x, textY),
-                            cv2.FONT_HERSHEY_PLAIN, 
-                            fontScale=30, 
-                            color=(0,0,0),
-                            thickness=30)
-            x = max(xs)
-            # line to show end of the date
-            cv2.line(rsltImg, (x,0), (x,endY), (128,128,128), dLineThick)
-        
-        msg = "[%s] storing & resizing the graph image ..."%(ak)
-        q2m.put(("displayMsg", msg,), True, None)
-
-        q2m.put(("finished", rsltImg, None), True, None) 
 
     #---------------------------------------------------------------------------
   
@@ -1771,30 +1673,29 @@ class ProcGraphData:
         x = mp[0]
         y = mp[1]
         pSz = p.pi["mp"]["sz"]
-        graphImg = self.graphImg[self.graphImgIdx]
-        offset = graphImg["offset"]
-        iSz = graphImg["img"].GetSize()
+        gImg = self.graphImg[self.graphImgIdx]
+        try: proc = gImg["proc"]
+        except: proc = ""
+        offset = gImg["offset"]
+        iSz = gImg["img"].GetSize()
 
         if ui == "mouseMove":
         # mouse pointer was moved
-            if p.eCase in ["L2020CSV2", "aos"]:
+            if p.eCase in self.c2showInfoOnMouseMove: 
+
                 if p.eCase == "L2020CSV2":
-                    if "valueData" in graphImg.keys():
-                        dataLst = graphImg["valueData"]
+                    if "valueData" in gImg.keys():
+                        dataLst = gImg["valueData"]
                     else:
                         dataLst = []
-                elif p.eCase == "aos":
-                    if graphImg["proc"] in [
-                                            "intensity", 
-                                            "localIntensity",
-                                            "spAGridActivity", 
-                                            "spAGridHeat",
-                                            "motionSpread",
-                                            #"distCent",
-                                            ]:
-                        dataLst = graphImg["bDataLst"]
-                    elif "|PSD" in graphImg["proc"]:
-                        dataLst = graphImg["fsPeriod"]
+                elif p.eCase in ["aos", "anVid"]:
+                    if "intensity" in proc.lower() or \
+                      "dist" in proc.lower() or \
+                      proc in ["spAGridActivity", "spAGridHeat", 
+                               "motionSpread"]:
+                        dataLst = gImg["bData"]
+                    elif "PSD" in proc:
+                        dataLst = gImg["fsPeriod"]
                     else:
                         dataLst = [] # no drawing 
 
@@ -1810,7 +1711,11 @@ class ProcGraphData:
                     if x < 0 or x > iSz[0]:
                         self.interactiveDrawing = {}
                     else: 
+                        txt = ""
+                        txtCol = wx.Colour(200,0,0)
                         ##### [begin] draw text about data -----
+                        if "mg" in gImg.keys(): mg = gImg["mg"]
+
                         if p.eCase == "L2020CSV2":
                             # data/frame index
                             idx = round(x / iSz[0] * len(dataLst))
@@ -1819,54 +1724,64 @@ class ProcGraphData:
                             txt = "Idx:%i, mNND:%s, dispersal:%s"%(idx, 
                                            dataLst[idx][0], dataLst[idx][1]) 
                             txtCol = wx.Colour(200,200,200) 
-
-                        elif p.eCase == "aos":
-                            mg = graphImg["mg"]
-                            if graphImg["proc"] in ["intensity", 
-                                                    "localIntensity",
-                                                    "motionSpread"]:
-                                                    #"distCent"]:
-                                nDataInRow = graphImg["nDataInRow"]
-                                initImgH = graphImg["initImgHeight"]
-                                bD_dt = graphImg["bD_dt"]
+ 
+                        if "intensity" in proc.lower() or \
+                          "dist" in proc.lower() or \
+                          proc in ["spAGridActivity", "spAGridHeat", 
+                                   "motionSpread"]:
+                            if p.eCase == "aos":
+                                nDataInRow = gImg["nDataInRow"]
+                                imgH = gImg["imgSz"][1]
+                                bD_dt = gImg["bD_dt"]
                                 ### calculate index for timestamp
                                 idx = int(x / iSz[0] * nDataInRow)
-                                days = len(graphImg["days"])
-                                dayH = initImgH / days
-                                pDays = int(y / iSz[1] * initImgH / dayH)
+                                days = len(gImg["days"])
+                                dayH = imgH / days
+                                pDays = int(y / iSz[1] * imgH / dayH)
                                 idx += pDays * nDataInRow 
                                 idx = min(len(bD_dt)-1, max(0, idx))
                                 ### text to display
-                                txt = ""
-                                if graphImg["proc"] == "localIntensity":
+                                if proc == "localIntensity":
                                     for key in dataLst.keys():
                                         txt += "%.3f/ "%(dataLst[key][idx])
                                 else:
                                     txt = "%s, "%(dataLst[idx])
                                 txt += "[%s]"%(str(bD_dt[idx]))
-                            
-                            elif graphImg["proc"] in ["spAGridActivity",
-                                                      "spAGridHeat"]:
-                                ### get datetime to display
-                                bD_dt = graphImg["bD_dt"]
-                                idx = int(x / iSz[0] * len(bD_dt))
-                                idx = min(len(bD_dt)-1, max(0, idx))
-                                txt = "[%s]"%(str(bD_dt[idx]))
-                                ### get grid index to display
-                                spAGrid = graphImg["spAGrid"]
-                                nCells = spAGrid["rows"] * spAGrid["cols"]
-                                idx = int(y / (iSz[1] / nCells))
-                                rIdx = int(idx / spAGrid["cols"])
-                                cIdx = int(idx % spAGrid["cols"])
-                                txt += " [%i][%i]"%(rIdx, cIdx)
 
-                            elif "|PSD" in graphImg["proc"]:
-                                initImgW = graphImg["initImgWidth"]
-                                #idx = round(x/iSz[0]*initImgW) - mg["l"]
-                                idx = round(x/iSz[0]*initImgW) - mg["l"]
-                                if idx < 0 or idx >= len(dataLst): txt = ""
-                                else: txt = "%s"%(dataLst[idx])
-                            txtCol = wx.Colour(200,0,0)
+                            elif p.eCase == "anVid":
+                                roiI = int(y / gImg["roiGraphHght"])
+                                roiK = f'roi{roiI:02d}'
+                                if roiK in gImg["nDataInRow"].keys():
+                                    nDataInRow = gImg["nDataInRow"][roiK]
+                                    imgH = gImg["imgSz"][1]
+                                    bD_dt = gImg["bD_dt"]
+                                    ### calculate index for timestamp
+                                    idx = int(x / iSz[0] * nDataInRow)
+                                    idx = min(len(bD_dt[roiK])-1, max(0, idx))
+                                    ### text to display
+                                    txt = "%s, "%(dataLst[roiK][idx])
+                                    txt += "[%s]"%(str(bD_dt[roiK][idx]))
+                        
+                        elif proc in ["spAGridActivity", "spAGridHeat"]:
+                            ### get datetime to display
+                            bD_dt = gImg["bD_dt"]
+                            idx = int(x / iSz[0] * len(bD_dt))
+                            idx = min(len(bD_dt)-1, max(0, idx))
+                            txt = "[%s]"%(str(bD_dt[idx]))
+                            ### get grid index to display
+                            spAGrid = gImg["spAGrid"]
+                            nCells = spAGrid["rows"] * spAGrid["cols"]
+                            idx = int(y / (iSz[1] / nCells))
+                            rIdx = int(idx / spAGrid["cols"])
+                            cIdx = int(idx % spAGrid["cols"])
+                            txt += " [%i][%i]"%(rIdx, cIdx)
+
+                        elif "PSD" in proc:
+                            imgW = gImg["imgSz"][0]
+                            #idx = round(x/iSz[0]*imgW) - mg["l"]
+                            idx = round(x/iSz[0]*imgW) - mg["l"]
+                            if idx < 0 or idx >= len(dataLst): txt = ""
+                            else: txt = "%s"%(dataLst[idx])
 
                         dc = wx.ClientDC(p)
                         w, h = dc.GetTextExtent(txt)
@@ -1938,26 +1853,26 @@ class ProcGraphData:
         elif ui == "navSlider":
         # navigation slider was moved
             if p.eCase == "aos":
-                if graphImg["proc"] != "heatmap": return
-                if x >= len(graphImg["bDataLst"]): return
+                if proc != "heatmap": return
+                if x >= len(gImg["bData"]): return
                 ### navigation slider moved, 
                 ###   draw corresponding motion data points
                 bdi = x # here is the slider position
-                dLen = len(graphImg["bDataLst"])
+                dLen = len(gImg["bData"])
                 self.interactiveDrawing["drawCircle"] = []
                 r = max(1, int(min(iSz) * 0.003))
                 pen = wx.Pen((0, 0, 0), 0, wx.TRANSPARENT)
                 brush = wx.Brush((0, 255, 255))
-                for i in range(len(graphImg["bDataLst"][bdi])):
-                    x, y = graphImg["bDataLst"][bdi][i]
-                    x = int(x * graphImg["ratDisp2OrigImg"])
-                    y = int(y * graphImg["ratDisp2OrigImg"])
+                for i in range(len(gImg["bData"][bdi])):
+                    x, y = gImg["bData"][bdi][i]
+                    x = int(x * gImg["ratDisp2OrigImg"])
+                    y = int(y * gImg["ratDisp2OrigImg"])
                     self.interactiveDrawing["drawCircle"].append(
                                     dict(x=x, y=y, r=r, pen=pen, brush=brush)
                                     )
                 ### timestamp of the current data position
-                y = graphImg["img"].GetSize()[1]-50
-                dt = str(graphImg["bD_dt"][bdi])
+                y = gImg["img"].GetSize()[1]-50
+                dt = str(gImg["bD_dt"][bdi])
                 col = wx.Colour(100,100,255)
                 self.interactiveDrawing["drawText"] = dict(textList=[dt],
                                                            coords=[(5,y)],
