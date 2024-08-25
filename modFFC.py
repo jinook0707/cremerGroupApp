@@ -7,10 +7,10 @@ Dependency:
     Numpy (1.17), 
     SciPy (1.4), 
 
-last edited on 2023-08-04
+last edited on 2024-04-25
 """
 
-import sys, errno, colorsys, re, traceback, pickle, logging
+import sys, errno, colorsys, re, traceback, pickle, pathlib
 from threading import Thread
 from os import path, strerror, system
 from time import time, sleep
@@ -26,33 +26,13 @@ import numpy as np
 from scipy import stats, signal
 import matplotlib.pyplot as plt
 
+from initVars import *
+
 if not "ICON_FP" in globals():
     _path = path.realpath(__file__)
     ICON_FP = path.join(path.split(_path)[0], "image", "icon.png")
 
 DEBUG = False
-
-#-------------------------------------------------------------------------------
-
-def setMyLogger(name, formatStr=""):
-    """ Set logger
-
-    Args:
-        name (str): Name of the logger
-        formatStr (str): Format string
-
-    Returns:
-        (logging.Logger): Logger
-    """
-    myLogger = logging.getLogger(name)
-    myLogger.setLevel(logging.DEBUG)
-    LSH = logging.StreamHandler()
-    LSH.setLevel(logging.DEBUG)
-    if formatStr == "":
-        formatStr = "%(asctime)-15s [%(levelname)s] %(funcName)s: %(message)s"
-    LSH.setFormatter(logging.Formatter(formatStr))
-    myLogger.addHandler(LSH)
-    return myLogger
 
 #-------------------------------------------------------------------------------
 
@@ -184,7 +164,12 @@ def get_datetime(tsStr, flagMicroSec=False):
         tsLst = []
         splitChr = ["-", ":"]
         for i in range(len(_tsL)):
-            for _ts in _tsL[i].split(splitChr[i]): tsLst.append(int(_ts))
+            for _ts in _tsL[i].split(splitChr[i]):
+                if "." in _ts:
+                    sec, mSec = _ts.split(".")
+                    tsLst += [int(sec), int(mSec)]
+                else:
+                    tsLst.append(int(_ts))
 
     if len(tsLst) < 3: return False
     tsDT = datetime(year=tsLst[0], month=tsLst[1], day=tsLst[2])
@@ -194,6 +179,27 @@ def get_datetime(tsStr, flagMicroSec=False):
         elif i == 5: tsDT = tsDT.replace(second=tsLst[i])
         elif i == 6 and flagMicroSec: tsDT = tsDT.replace(microsecond=tsLst[i])
     return tsDT
+
+#-------------------------------------------------------------------------------
+
+def getFileMTime(fp):
+    """ Function to return a file's last modification time 
+
+    Args:
+        fp (str): Input filepath.
+
+    Returns:
+        (datetime): Datetime to return.
+
+    Examples:
+        >>> getFileMTime('test.mp4') 
+        datetime.datetime(2022, 2, 8, 17, 19, 3)
+    """
+    if DEBUG: MyLogger.info(str(locals()))
+
+    if not path.isfile(fp): return
+    f = pathlib.Path(fp)
+    return datetime.fromtimestamp(f.stat().st_mtime)
 
 #-------------------------------------------------------------------------------
 
@@ -219,12 +225,13 @@ def writeFile(file_path, txt='', mode='a'):
 
 #-------------------------------------------------------------------------------
 
-def getFilePaths_recur(folderPath):
+def getFilePaths_recur(folderPath, flagIncludeDir=False):
     """ Returns paths of all files under the given path (folderPath), 
     finding files recursively in all sub-folders of the folderPath. 
 
     Args:
-        folderPath (str): Folder path to start. 
+        folderPath (str): Folder path to start.
+        flagIncludDir (bool): Whether to include folder-names.
 
     Returns:
         fpLst (list): List of the found file paths. 
@@ -233,8 +240,9 @@ def getFilePaths_recur(folderPath):
 
     fpLst = []
     for fp in sorted(glob(path.join(folderPath, "*"))):
-        if path.isdir(fp): 
-            fpLst += getFilePaths_recur(fp)
+        if path.isdir(fp):
+            if flagIncludeDir: fpLst.append(fp)
+            fpLst += getFilePaths_recur(fp, flagIncludeDir)
         elif path.isfile(fp):
             fpLst.append(fp)
 
@@ -264,18 +272,22 @@ def str2num(s, c=''):
         3
     """
     if DEBUG: MyLogger.info(str(locals()))
+   
+    if s == '':
+        return 0
     
-    oNum = None 
-    if c != '': # conversion method is given
-        try: oNum = eval('%s(%s)'%(c, s)) # try the intended conversion
-        except: pass
-    else: # no conversion is specified
-        try:
-            oNum = int(s) # try to convert to integer first
-        except:
-            try: oNum = float(s) # then, float
+    else:
+        oNum = None 
+        if c != '': # conversion method is given
+            try: oNum = eval('%s(%s)'%(c, s)) # try the intended conversion
             except: pass
-    return oNum 
+        else: # no conversion is specified
+            try:
+                oNum = int(s) # try to convert to integer first
+            except:
+                try: oNum = float(s) # then, float
+                except: pass
+        return oNum 
 
 #-------------------------------------------------------------------------------
 
@@ -361,7 +373,7 @@ def load_img(fp, size=(-1,-1)):
     if size != (-1,-1) and type(size[0]) == int and \
       type(size[1]) == int: # appropriate size is given
         if img.GetSize() != size:
-            img = img.Rescale(size[0], size[1])
+            img = img.Rescale(size[0], size[1], wx.IMAGE_QUALITY_HIGH)
     
     return img
 
@@ -746,24 +758,29 @@ def updateFrameSize(wxFrame, w_sz):
 
 #-------------------------------------------------------------------------------
 
-def calcImgSzFitToPSz(iSz, pSz, frac=0.95):
-    """ Calculates image size which fits to the given panel size, 
-    while keeping the aspect ratio.
+def calcI2DRatio(iSz, dispSz, flagEnlarge=False, frac=0.95): 
+    """ Calculate ratio for resizing frame image to fit
+        the display (in StaticBitmap, paintDC, etc)
 
     Args:
         iSz (tuple): Image size
-        pSz (tuple): Panel size
-        frac (float): Fraction of the panel size to use in calculation
+        dispSz (tuple): Width and height of StaticBitmap to display image.
+        flagEnlarge (bool): If True, also calculate ratio when img size is
+                            smaller than display size.
+        frac (float): Fraction of the panel size to use.
 
     Returns:
-        (tuple): Fit image size
-    """
+        r (float): Float number for resizing image later.
+    """ 
     if DEBUG: MyLogger.info(str(locals()))
 
-    rat = pSz[0]*frac / iSz[0]
-    if iSz[1]*rat > pSz[1]*frac:
-        rat = pSz[1]*frac / iSz[1]
-    return (int(iSz[0]*rat), int(iSz[1]*rat))
+    if flagEnlarge or (iSz[0] > dispSz[0] or iSz[1] > dispSz[1]):
+        r1 = float(dispSz[0]*frac) / iSz[0]
+        r2 = float(dispSz[1]*frac) / iSz[1]
+        r = min(r1, r2)
+    else:
+        r = 1.0
+    return r 
 
 #-------------------------------------------------------------------------------
 
@@ -886,7 +903,7 @@ def widgetValue(w, val2set="", flag="get", where2find=None):
 
 #-------------------------------------------------------------------------------
 
-def preProcUIEvt(frame, event, objName, objType):
+def preProcUIEvt(frame, event, objName, objType=""):
     """ Conduct some common processes when there was UI event in
     an wxPython object.
     
@@ -894,7 +911,7 @@ def preProcUIEvt(frame, event, objName, objType):
         frame (wx.Frame): Frame that calls this function 
         event (wx.Event)
         objName (str): Name of the widget, supposed to cause the event.
-        objType (str): Type of the widget.
+        objType (str): [!! Currently NOT Used !!] Type of the widget
     
     Returns:
         flag_term (bool): flag to quit function
@@ -1192,33 +1209,6 @@ def getConspicuousCol(col):
         v = 1.0 - hsv[2]
     tmp = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(h,s,v))
     return tmp
-
-#-------------------------------------------------------------------------------
-
-def calcI2DIRatio(img, dispSz, flagEnlarge=False): 
-    """ Calculate ratio for resizing frame image to 
-        display image (in StaticBitmap, paintDC, etc),
-        when frame image is too large for display
-
-    Args:
-        img (numpy.ndarray): Input image.
-        dispSz (tuple): Width and height of StaticBitmap to display image.
-        flagEnlarge (bool): If True, also calculate ratio when img size is
-                            smaller than display size.
-
-    Returns:
-        r (float): Float number for resizing image later.
-    """ 
-    if DEBUG: MyLogger.info(str(locals()))
-
-    iSz = (img.shape[1], img.shape[0])
-    if flagEnlarge or (iSz[0] > dispSz[0] or iSz[1] > dispSz[1]):
-        r1 = float(dispSz[0]) / iSz[0]
-        r2 = float(dispSz[1]) / iSz[1]
-        r = min(r1, r2)
-    else:
-        r = 1.0
-    return r 
 
 #-------------------------------------------------------------------------------
 
@@ -2080,8 +2070,6 @@ class PopupDialog(wx.Dialog):
         return values
     
 #===============================================================================
-
-MyLogger = setMyLogger("modFFC")
 
 if __name__ == '__main__':
     pass

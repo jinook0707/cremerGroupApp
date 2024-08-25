@@ -9,7 +9,7 @@ Dependency:
     OpenCV (4.1),
     Scikit-Video (1.1)
 
-last editted: 2023-07-12
+last editted: 2024-04-01
 """
 
 import sys, queue, subprocess
@@ -49,7 +49,6 @@ except:
     pass
 
 from modFFC import *
-MyLogger = setMyLogger("modFFC")
 
 DEBUG = False
 
@@ -64,7 +63,7 @@ def getOpenCVVersion():
     Returns:
         cvVer (float): OpenCV's version 
     """
-    if DEBUG: print("modCV.getOpenCVVersion()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     cvVer = cv2.__version__.split(".")
     return float("%s.%s"%(cvVer[0], cvVer[1]))
@@ -81,7 +80,7 @@ def convt_cvImg2wxImg(imgArr, toBMP=False):
     Returns:
         (tuple): Tuple of RGB values 
     """ 
-    if DEBUG: print("modCV.convt_cvImg2wxImg()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     iSz = (imgArr.shape[1], imgArr.shape[0])
     imgArr = cv2.cvtColor(imgArr, cv2.COLOR_BGR2RGB)
@@ -102,7 +101,7 @@ def convt_wxImg2cvImg(img, fromBMP=False):
     Returns:
         arr (numpy.ndarray): numpy array (BGR image)
     """ 
-    if DEBUG: print("modCV.convt_wxImg2cvImg()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     if fromBMP: img = img.ConvertToImage()
     arr = np.frombuffer(img.GetDataBuffer(), dtype=np.uint8)
@@ -123,7 +122,7 @@ def convt_mplFig2npArr(fig):
     Returns:
         imgArr (numpy.ndarray)
     """
-    if DEBUG: logging.info(str(locals()))
+    if DEBUG: MyLogger.info(str(locals()))
 
     fig.canvas.draw()
     buf = fig.canvas.tostring_rgb()
@@ -146,7 +145,7 @@ def cvHSV2RGB(h, s, v):
     Returns:
         (tuple): Tuple of RGB values 
     """ 
-    if DEBUG: print("modCV.cvHSV2RGB()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     h = h / 180.0
     s = s / 255.0
@@ -166,7 +165,7 @@ def rgb2cvHSV(r, g, b):
     Returns:
         (tuple): Tuple of HSV values 
     """ 
-    if DEBUG: print("modCV.rgb2cvHSV()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     r = r / 255.0
     g = g / 255.0
@@ -188,7 +187,7 @@ def highContrast(img):
     Returns:
         img (numpy.ndarray): Image array with enhanced contrast 
     """ 
-    if DEBUG: print("modCV.highContrast()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     # converting image to LAB Color model
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
@@ -216,7 +215,7 @@ def drawSkeleton(img, thr=[30,50]):
     Returns:
         ret (numpy.ndarray): Binary image which has center lines of the blobs. 
     """ 
-    if DEBUG: print("modCV.drawSkeleton()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     img = cv2.Canny(img, thr[0], thr[1])
     img, cnts, hierarchy = cv2.findContours(img, cv2.RETR_LIST, 
@@ -244,7 +243,7 @@ def drawCvxHullDefects(img, lineCol=200, lineThck=3, dotCol=100, dotRad=5):
     Returns:
         img (numpy.ndarray): Binary image with defects drawn. 
     """ 
-    if DEBUG: print("modCV.drawCvxHullDefects()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     img, cnts, hierarchy = cv2.findContours(img, 
                                             cv2.RETR_LIST, 
@@ -278,7 +277,7 @@ def detectLinesF(img, length_threshold=10, distance_threshold=1.414213562,
     Returns:
         pts (numpy.ndarray): Three points of lines; both ends + middle point
     """ 
-    if DEBUG: print("modCV.detectLines()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     fld = cv2.ximgproc.createFastLineDetector(
                             length_threshold, distance_threshold, 
@@ -310,7 +309,7 @@ def getColorInfo(img, pt, m=1):
     Returns:
         colInfo (dict): Information about color
     """ 
-    if DEBUG: print("modCV.getColorInfo()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     r = [pt[0]-m, pt[1]-m, pt[0]+m+1, pt[1]+m+1] # rect
     roi = img[r[1]:r[3],r[0]:r[2]] # region of interest
@@ -343,7 +342,7 @@ def getCamIdx(maxIdx=4):
         >>> getCamIdx()
         [0]
     """
-    if DEBUG: print("modCV.getCamIdx()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     idx = []
     for i in range(maxIdx):
@@ -367,7 +366,7 @@ def getPossibleResolutions():
     Returns:
         pRes (dict): Possible resolutions of each camera.
     """
-    if DEBUG: print("modCV.getPossibleResolutions()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     # known resolutions
     resolutions = [(16, 16), (42, 11), (32, 32), (40, 30), (42, 32), (48, 32), 
@@ -440,7 +439,7 @@ def getFontScale(cvFont, thresholdPixels=20, thick=1):
         h (int): Height of character
         bl (int): Baseline
     """
-    if DEBUG: print("modCV.getFontScale()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     fs = 0.1
     while True:
@@ -451,11 +450,11 @@ def getFontScale(cvFont, thresholdPixels=20, thick=1):
 
 #-------------------------------------------------------------------------------
 
-def clustering(pt_list, threshold, criterion='distance'):
+def clustering(pts, threshold, criterion='distance'):
     """ Cluster given points
 
     Args:
-        pt_list (list): List of points.
+        pts (list or np.ndarray): points.
         threshold (int): Threshold to cluster.
         criterion (str): Criterion for fclusterdata function.
 
@@ -463,10 +462,11 @@ def clustering(pt_list, threshold, criterion='distance'):
         nGroups (int): Number of groups.
         groups (list): List of groups.
     """
-    if DEBUG: print("modCV.clustering()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     cRslt = []
-    try: cRslt = list(fclusterdata(np.asarray(pt_list), 
+    if type(pts) == list: pts = np.asarray(pts)
+    try: cRslt = list(fclusterdata(pts, 
                                    threshold, 
                                    criterion=criterion,
                                    metric='euclidean'))
@@ -474,17 +474,65 @@ def clustering(pt_list, threshold, criterion='distance'):
     nGroups = 0
     groups = []
     if cRslt != []:
-        groups = []
         nGroups = max(cRslt)
-        for i in range(nGroups): groups.append([])
+        groups = [[] for i in range(nGroups)]
         for i in range(len(cRslt)):
-             groups[cRslt[i]-1].append(pt_list[i])
+             groups[cRslt[i]-1].append(pts[i])
     return nGroups, groups
+
+#---------------------------------------------------------------------------
+    
+def calcLRPts(rr): 
+    """
+    Calculating line along a blob from RotatedRect box
+
+    Args:
+        rr (OpenCV RotatedRect box): Result of cv2.minAreaRect on 
+          points of a blob.
+
+    Returns:
+        lx (int): 'x' of middle point of two points on left side of rect 
+        ly (int): 'y' of middle point of two points on left side of rect 
+        lpts (tuple): two points of rect on left side
+        rx (int): 'x' of middle point of two points on right side of rect 
+        ry (int): 'y' of middle point of two points on right side of rect 
+        rpts (tuple): two point of rect on right side
+    """
+    if DEBUG: MyLogger.info(str(locals()))
+    
+    box = cv2.boxPoints(rr)
+    box = np.int64(box)
+    ### group 2 closer points
+    s1=[]; s2=[]
+    _d = []
+    _d.append(np.sqrt(
+        (box[0][0]-box[1][0])**2 + (box[0][1]-box[1][1])**2
+        ))
+    _d.append(np.sqrt(
+        (box[0][0]-box[2][0])**2 + (box[0][1]-box[2][1])**2
+        ))
+    _d.append(np.sqrt(
+        (box[0][0]-box[3][0])**2 + (box[0][1]-box[3][1])**2
+        ))
+    # index of closest point to the first box point
+    iC20 = _d.index(min(_d)) + 1 
+    s2Idx = list(range(1,4)); s2Idx.remove(iC20)
+    s1.append(tuple(box[0])); s1.append(tuple(box[iC20]))
+    for s2i in s2Idx: s2.append(tuple(box[s2i]))
+    ### get center point of each group and calc.
+    ### left and right side points
+    s1x = int((s1[0][0]+s1[1][0])/2)
+    s1y = int((s1[0][1]+s1[1][1])/2)
+    s2x = int((s2[0][0]+s2[1][0])/2)
+    s2y = int((s2[0][1]+s2[1][1])/2)
+    if s1x < s2x: lx=s1x; ly=s1y; lpts=s1; rx=s2x; ry=s2y; rpts=s2
+    else: lx=s2x; ly=s2y; lpts=s2; rx=s1x; ry=s1y; rpts=s1
+    return lx, ly, lpts, rx, ry, rpts
 
 #-------------------------------------------------------------------------------
 
-def preProcImg(img, dilation=1, erosion=1, flagGrey=False):
-    """ pre-processing image.
+def makeImgDull(img, dilation=1, erosion=1, flagGrey=False):
+    """ apply dilation & erosio, then convert it to grayscale
 
     Args:
         img (numpy.ndarray): Image (BGR image) array to process. 
@@ -495,7 +543,7 @@ def preProcImg(img, dilation=1, erosion=1, flagGrey=False):
     Returns:
         img (numpy.ndarray): image after pre-processing. 
     """
-    if DEBUG: print("modCV.preProcImg()")
+    if DEBUG: MyLogger.info(str(locals()))
     
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
     
@@ -521,7 +569,7 @@ def findColor(img, hsvMin, hsvMax, r=None):
     Returns:
         retImg (numpy.ndarray): Binary image indicating the found color.
     """
-    if DEBUG: print("modCV.findColor()")
+    if DEBUG: MyLogger.info(str(locals()))
     
     mask = np.zeros((img.shape[0], img.shape[1]) , dtype=np.uint8)
     if r == None:
@@ -554,7 +602,7 @@ def getCentroid(img):
     Returns:
         (tuple): Coordinate of the centroid.
     """
-    if DEBUG: print("modCV.getCentroid()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     m = cv2.moments(img)
     if m["m00"] != 0:
@@ -578,7 +626,7 @@ def maskImg(img, rois, col):
     Returns:
         img (numpy.ndarray): Output image. 
     """
-    if DEBUG: print("modCV.maskImg()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     sh = img.shape
     bgImg = np.zeros(sh, dtype=np.uint8)
@@ -606,7 +654,7 @@ def drawEllipse(img, center, axes, angle, startAngle, endAngle, color,
                 thickness=1, lineType=cv2.LINE_AA, shift=10):
     """ wrapper for OpenCV's ellipse function
     """
-    if DEBUG: print("modCV.drawEllipse()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     ### uses the shift to accurately get sub-pixel resolution for arc
     ### taken from https://stackoverflow.com/a/44892317/5087436
@@ -648,7 +696,7 @@ def drawTxtWithPIL(img, txt, pos, fontName="LiberationMono-Regular.ttf",
     Returns:
         (numpy.ndarray): output image array 
     """ 
-    if DEBUG: print("modCV.drawTxtWithPIL()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     text_to_show = "The quick brown fox jumps over the lazy dog"  
  
@@ -681,7 +729,7 @@ def convt_raw2png(fp, pFormat="BayerRG", res=(3000,4000), compression=6):
     Returns:
         None
     """
-    if DEBUG: print("modCV.convt_FLIRRaw2jpg()")
+    if DEBUG: MyLogger.info(str(locals()))
 
     img = np.fromfile(fp, dtype=np.uint8).reshape(res)
     if pFormat == "BayerRG":
@@ -695,6 +743,55 @@ def convt_raw2png(fp, pFormat="BayerRG", res=(3000,4000), compression=6):
     newFP = fp.replace(".Raw", ".png")
     cv2.imwrite(newFP, cImg, [cv2.IMWRITE_PNG_COMPRESSION, compression])
 
+#---------------------------------------------------------------------------
+    
+def getCntData(img, thr, flag_pts=True):
+    """ Get some useful data from contours in a given image.
+
+    Args:
+        img (numpy.ndarray): Greyscale image to get contour data.
+        thr (int): Minimum size (width+height) of boundingRect of a contour. 
+        flag_pts (bool): Whether to calculate cnt_pts, cnt_br & cnt_cpt.
+
+    Returns:
+        cnt_info (list): contour info list. 
+            each item is a tuple (size, center-X, center-Y) of a contour.
+            'size' is width + height.
+        cnt_pts (list): list of every pixels in all contours.
+        cnt_br (CvRect): bounding rect of all contour points
+        cnt_cpt (tuple): center point of all contours.
+    """
+    if FLAGS["debug"]: logging.info(str(locals()))
+
+    cnt_info = [] # contour info (size, center-X, center-Y)
+    cnt_pts = []
+    cnt_br = (-1, -1, -1, -1)
+    cnt_cpt = (-1, -1)
+
+    ### find contours
+    ver = getOpenCVVersion() # OpenCV version
+    mode = cv2.RETR_EXTERNAL 
+    method = cv2.CHAIN_APPROX_SIMPLE
+    if ver >= 4.0: cnts, hierarchy = cv2.findContours(img, mode, method)
+    else: img, cnts, hierarchy = cv2.findContours(img, mode, method) 
+    
+    for ci in range(len(cnts)):
+        mr = cv2.boundingRect(cnts[ci])
+        if mr[2]+mr[3] < thr: continue
+        cnt_info.append((mr[2]+mr[3], 
+                         mr[0]+int(mr[2]/2), 
+                         mr[1]+int(mr[3]/2)))
+        if flag_pts:
+            cnt_pts += list(cnts[ci].reshape((cnts[ci].shape[0], 2)))
+    
+    if flag_pts and len(cnt_info) > 0:
+        # rect bounding all contour points
+        cnt_br = cv2.boundingRect(np.asarray(cnt_pts))
+        # calculate center point of all contours
+        cnt_cpt = (cnt_br[0]+int(cnt_br[2]/2), cnt_br[1]+int(cnt_br[3]/2))
+
+    return cnt_info, cnt_pts, cnt_br, cnt_cpt
+
 #===============================================================================
 
 class VideoIn:
@@ -706,7 +803,7 @@ class VideoIn:
 
     def __init__(self, parent, cIdx, desiredRes=(-1,-1), fpsLimit=30, 
                  outputFormat="image", ssIntv=1.0, params={}):
-        if DEBUG: print("VideoIn.__init__()")
+        if DEBUG: MyLogger.info(str(locals()))
         
         ##### [begin] class attributes -----
         self.classTag = "videoIn-%i"%(cIdx)
@@ -763,12 +860,12 @@ class VideoIn:
         Returns:
             None
         """
-        if DEBUG: print("VideoIn.run()")
+        if DEBUG: MyLogger.info(str(locals()))
 
         #-----------------------------------------------------------------------
         def startRecording(cIdx, oFormat, recFolder, fps, fSz, 
                            fpsLimit, ssIntv):
-            if DEBUG: print("VideoIn.run.startRecording()")
+            if DEBUG: MyLogger.info(str(locals()))
             # Define the codec and create VideoWriter object
             #fourcc = cv2.VideoWriter_fourcc(*'X264')
             fourcc = cv2.VideoWriter_fourcc(*'avc1') # for saving mp4 video
@@ -797,7 +894,7 @@ class VideoIn:
         #-----------------------------------------------------------------------
         
         def stopRecording(out, cIdx):
-            if DEBUG: print("VideoIn.run.stopRecording()")
+            if DEBUG: MyLogger.info(str(locals()))
             if isinstance(out, cv2.VideoWriter): out.release()
             out = None
             self.parent.log("recording stops.", self.classTag) # log
@@ -913,7 +1010,7 @@ class VideoIn:
         
         Returns: None
         """
-        if DEBUG: print("VideoIn.close()")
+        if DEBUG: MyLogger.info(str(locals()))
 
         self.cap.release()
         self.parent.log("Mod close.", self.classTag) 
@@ -934,7 +1031,7 @@ class VideoRW:
 
     def __init__(self, parent, codec="XVID", 
                  useSKVideo=False, skIn={}, skOut={}):
-        if DEBUG: print("VideoRW.__init__()")
+        if DEBUG: MyLogger.info(str(locals()))
         
         ##### [begin] setting up attributes on init. -----
         self.parent = parent
@@ -945,6 +1042,7 @@ class VideoRW:
         self.currFrame = None # current frame image (ndarray)
         self.nFrames = 0 # total number of frames
         self.fi = -1 # current frame index
+        self.timestamp = -1 # timestamp of the current frame 
         self.th = None # thread
         self.q2m = queue.Queue() # queue from thread to main
         self.q2t = queue.Queue() # queue from main to thread 
@@ -967,7 +1065,7 @@ class VideoRW:
         Returns:
             None
         """
-        if DEBUG: print("VideoRW.initReader()") 
+        if DEBUG: MyLogger.info(str(locals()))
 
         self.fPath = fPath
         if path.isfile(self.fPath):
@@ -975,8 +1073,20 @@ class VideoRW:
             self.vCap = cv2.VideoCapture(fPath)
             # get total number of frames
             self.nFrames = int(self.vCap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.fps = self.vCap.get(cv2.CAP_PROP_FPS)
         else:
             self.nFrames = len(glob(path.join(self.fPath, "*.jpg")))
+
+        if self.nFrames == 0:
+        # failed to read n of frames
+            nf = 0
+            while(True):
+                ret, frame = self.vCap.read()
+                if not ret: break
+                nf += 1
+            self.nFrames = nf
+            self.vCap.release()
+            self.vCap = cv2.VideoCapture(fPath)
         self.fi = -1
         self.getFrame(-1) # read the 1st frame
         # store frame size
@@ -999,7 +1109,7 @@ class VideoRW:
         Returns:
             None
         """
-        if DEBUG: print("VideoRW.initWriter()") 
+        if DEBUG: MyLogger.info(str(locals()))
 
         # if file already exists, delete it
         if path.isfile(fPath): remove(fPath)
@@ -1052,7 +1162,7 @@ class VideoRW:
             ret (bool): Notifying whether the image retrieval was successful.
             frame (numpy.ndarray): Frame image.
         """
-        if DEBUG: print("VideoRW.getFrame()")
+        if DEBUG: MyLogger.info(str(locals()))
 
         if self.fi >= self.nFrames: return
 
@@ -1094,6 +1204,7 @@ class VideoRW:
             if ret: # if a frame was successfully retrieved
                 self.fi += nRF 
                 self.currFrame = frame
+                self.timestamp = self.vCap.get(cv2.CAP_PROP_POS_MSEC)
             return ret
         else:
         # otherwise
@@ -1104,6 +1215,7 @@ class VideoRW:
                 if ret:
                     self.fi += nRF 
                     self.currFrame = frame
+                    self.timestamp = self.vCap.get(cv2.CAP_PROP_POS_MSEC)
                     return True
                 else: # failed to jump to the target frame-index
                     self.vCap.release()
@@ -1151,7 +1263,7 @@ class VideoRW:
         Returns:
             None
         """
-        if DEBUG: print("VideoRW.readFrames()") 
+        if DEBUG: MyLogger.info(str(locals()))
         
         for i in range(n):
             ret, frame = self.vCap.read()
@@ -1173,7 +1285,7 @@ class VideoRW:
         Returns:
             None
         """
-        if DEBUG: print("VideoRW.writeFrames()")
+        if DEBUG: MyLogger.info(str(locals()))
         
         ### write video frames
         for fi in range(self.nFrames):
@@ -1198,7 +1310,7 @@ class VideoRW:
         Returns:
             None
         """
-        if DEBUG: print("VideoRW.writeFrame()")
+        if DEBUG: MyLogger.info(str(locals()))
 
         try:
             ### resize frame
@@ -1226,7 +1338,7 @@ class VideoRW:
         Returns:
             None
         """
-        if DEBUG: print("VideoRW.extractImgsFromVideo()")
+        if DEBUG: MyLogger.info(str(locals()))
          
         ### init video
         self.vCap.release()
@@ -1264,7 +1376,7 @@ class VideoRW:
         Returns:
             None
         """
-        #if DEBUG: print("VideoRW.onTimer()") 
+        #if DEBUG: MyLogger.info(str(locals()))
 
         ### receive (last) data from queue
         rData = None
@@ -1281,6 +1393,7 @@ class VideoRW:
             elif len(rData) == 2:
             # reached target frame index
                 self.fi, self.currFrame = rData
+                self.timestamp = self.vCap.get(cv2.CAP_PROP_POS_MSEC)
                 self.timer["readFrames"].Stop()
                 self.timer["readFrames"] = None
                 self.targetFI = -1
@@ -1310,7 +1423,7 @@ class VideoRW:
 
         Returns: None
         """
-        if DEBUG: print("VideoRW.closeReader()") 
+        if DEBUG: MyLogger.info(str(locals()))
         
         if path.isfile(self.fPath):
             self.vCap.release() # close video capture instance
@@ -1328,7 +1441,7 @@ class VideoRW:
 
         Returns: None
         """
-        if DEBUG: print("VideoRW.closeWriter()")
+        if DEBUG: MyLogger.info(str(locals()))
 
         ### finish recorder
         try:

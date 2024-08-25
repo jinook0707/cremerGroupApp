@@ -1,7 +1,7 @@
 """
 Functions for antSim
 
-last edited: 2023-08-05
+last edited: 2023-09-08
 """
 
 import sys
@@ -624,7 +624,7 @@ def drawProbDistributions(kwa):
         if k == "mpp": 
         # n of motion points graph 
             if "mpl" not in kwa.keys(): continue
-            x = kwa[k]
+            x = kwa["mpl"]
             _title = "Probability for number of motions"
             rK = "mp"
 
