@@ -7,7 +7,7 @@ Dependency:
     SciPy (1.4)
     OpenCV (3.4)
 
-last edited: 2024-06-23
+last edited: 2025-11-18
 """
 
 from os import path
@@ -16,6 +16,7 @@ from copy import copy
 
 from scipy.signal import savgol_filter, find_peaks
 from scipy.stats import iqr 
+from scipy.optimize import curve_fit
 
 from initVars import *
 from modFFC import *
@@ -294,7 +295,7 @@ class ProcAntOSSec:
 
         ##### [begin] draw deviation graph -----
         diffFrom = "median" # mean or median
-        flagNormalize = False # normalize to -1 to 1
+        flagPMCNorm = False # normalize to -1 to 1 for PMC
         if pa["aType"] == "proxMCluster": meanPMCLst = {}
         for ns in nSLst:
             fig, ax = plt.subplots(pa["nRow"], pa["nCol"], 
@@ -322,15 +323,20 @@ class ProcAntOSSec:
                     gd = []
                     for i in range(hWL, len(d)-hWL, windowLen):
                         gd.append(np.sum(d[i-hWL:i+hWL]))
-                    if flagNormalize:
+                    if flagPMCNorm:
                         ### normalize (division by max value)
                         gd = np.asarray(gd)
                         gd = gd / np.max(np.abs(gd))
 
                 else:
-                    gd = d
+                    gd = d / np.max(d) # normalize
+                    ### moving average
+                    window = 13
+                    kernel = np.ones(window) / window
+                    gd = np.convolve(gd, kernel, mode='same')
                 # draw bar graph
                 ax[ri,ci].bar(list(range(len(gd))), height=gd) 
+                ax[ri,ci].set_ylim(-1, 1)
 
                 if pa["aType"] == "proxMCluster":
                     ### draw smooth line
@@ -339,7 +345,7 @@ class ProcAntOSSec:
                     gsd = savgol_filter(gd, window_length=wLen, polyorder=3)
                     ax[ri,ci].plot(gsd, c=(1.0,0.5,0), linewidth=0.75)
                    
-                    if flagNormalize:
+                    if flagPMCNorm:
                         ax[ri,ci].set_ylim(-1.0, 1.0)
                     else:
                         ax[ri,ci].set_ylim(-1*1e6, 4*1e6)
@@ -354,30 +360,58 @@ class ProcAntOSSec:
                                    horizontalalignment="left", 
                                    verticalalignment="top")
                     '''
-                else:  
-                    ### draw regression line
-                    regX = np.asarray(range(len(gd)))
-                    slope, intcpt = np.polyfit(regX, gd, 1)
-                    ax[ri,ci].plot(regX, slope*regX+intcpt, 
-                                   c=(1.0,0,0), linewidth=0.75)
-
+                else:
                     w = wx.FindWindowByName("maxYDev_txt", main.panel["ml"])
                     maxY = widgetValue(w).strip()
                     if maxY in ["", "-1"]: maxY = max(gd)
                     else: maxY = int(maxY)
                     ax[ri,ci].set_ylim(-maxY, maxY)
+                    '''
+                    [DEPRECATED; regression line]
+                    ### draw regression line
+                    regX = np.asarray(range(len(gd)))
+                    slope, intcpt = np.polyfit(regX, gd, 1)
+                    ax[ri,ci].plot(regX, slope*regX+intcpt, 
+                                   c=(1.0,0,0), linewidth=0.75) 
 
                     # write the slope of the regression line
                     w = wx.FindWindowByName("decPlDev_cho", main.panel["ml"])
                     decPlaces = int(widgetValue(w))
                     txt = f'{slope:.{decPlaces}f}'
-                    if maxY == -1: y = 0
-                    else: y = maxY
                     ax[ri,ci].text(len(gd), maxY, txt, fontsize=12,
                                    horizontalalignment="right", 
                                    verticalalignment="bottom")
  
                     setYFormat(maxY, ax[ri,ci])
+                    '''
+                    ### curve fit of decay after normalization
+                    def expDecay(t, A0, k):
+                        return A0 * np.exp(-k * t)
+                    # initial guesses: A0 ~ max value, k small positive number
+                    p0 = [np.max(gd), 0.001]
+                    ### fit
+                    tm = np.arange(len(gd))
+                    params, cov = curve_fit(
+                        expDecay, 
+                        tm, 
+                        gd, 
+                        p0=p0, 
+                        maxfev=20000
+                    )
+                    A0_hat, k_hat = params
+                    hLife = np.log(2) / k_hat
+                    hLife = hLife * 5.0 / 60.0 # convert half-life to hours
+                    _txt = f"[{ns}][{ds}] A0: {A0_hat:.3f}"
+                    _txt += f", k: {k_hat:.3f}, half-life: {hLife:.1f}"
+                    print(_txt)
+                    ### draw fitted exponential curve
+                    fitCurve = expDecay(tm, A0_hat, k_hat)
+                    ax[ri,ci].plot(tm, fitCurve, color='red', linewidth=0.5)
+                    ### write the half-life
+                    ax[ri,ci].text(len(gd), maxY, f"{hLife:.1f}", fontsize=12,
+                                   horizontalalignment="right", 
+                                   verticalalignment="bottom")
+                    ax[ri,ci].set_xticks([])
                
                 ci += 1
                 if ci >= pa["nCol"]:
